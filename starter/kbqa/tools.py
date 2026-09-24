@@ -102,7 +102,8 @@ class DataTools:
         if cursor.description is None:
             return {"error": "这条语句没有返回结果集，不能作为证据", "sql": sql}
         columns = [str(item[0]) for item in cursor.description][:MAX_SQL_COLUMNS]
-        fetched = cursor.fetchall()
+        # 有界读取：一次只取 MAX_SQL_ROWS + 1 行来判断是否超限，绝不把整表读进内存。
+        fetched = cursor.fetchmany(MAX_SQL_ROWS + 1)
         truncated_rows = len(fetched) > MAX_SQL_ROWS
         rows = [
             {column: row[index] for index, column in enumerate(columns)}
@@ -115,6 +116,8 @@ class DataTools:
             "row_count": len(rows),
             "truncated": truncated_rows,
         }
+        if len(cursor.description) > MAX_SQL_COLUMNS:
+            result["columns_total"] = len(cursor.description)
         return fit_evidence(result)
 
     def stores(self) -> list[dict]:

@@ -60,6 +60,11 @@ WRITE_WORDS = frozenset(
     }
 )
 
+#: SQLite 内部对象：系统表与表值 pragma 函数，一律不许业务查询触碰。
+#: 覆盖 ``sqlite_master``/``sqlite_schema``/``sqlite_temp_master`` 及所有 ``sqlite_*``、
+#: ``pragma_*``（如 ``pragma_table_info``、``pragma_database_list``）。
+_INTERNAL_NAME = re.compile(r"(?<![a-z0-9_])((?:sqlite|pragma)_[a-z0-9_]*)")
+
 
 def sql_skeleton(sql: str) -> tuple[str, int]:
     """把注释、字符串字面量与带引号的标识符抹成空白，返回（骨架, 语句条数）。
@@ -113,6 +118,16 @@ def sql_skeleton(sql: str) -> tuple[str, int]:
     return "".join(out), statements
 
 
+def internal_objects(sql: Any) -> list[str]:
+    """找出被引用的 SQLite 内部对象名（含被引号包起来、绕过词元扫描的写法）。
+
+    词法骨架会把带引号的标识符抹成空白，``FROM "sqlite_master"`` 因此躲得过词元检查，
+    所以这里在“去掉引号字符”的原文上再扫一遍。
+    """
+    relaxed = re.sub(r"[\"'`\[\]]", "", (sql or "").lower())
+    return sorted({match.group(1) for match in _INTERNAL_NAME.finditer(relaxed)})
+
+
 def check_readonly_sql(sql: Any) -> list[str]:
     """返回问题列表；空列表代表这条 SQL 是安全、只读、且真的查了表。"""
     if not isinstance(sql, str) or not sql.strip():
@@ -131,6 +146,9 @@ def check_readonly_sql(sql: Any) -> list[str]:
         writes.append("replace into")
     if writes:
         problems.append("出现了写操作关键字：%s" % "、".join(writes))
+    internal = internal_objects(sql)
+    if internal:
+        problems.append("访问了 SQLite 内部对象：%s（只允许业务表）" % "、".join(internal))
     return problems
 
 
@@ -154,44 +172,68 @@ def _trim_cells(rows: list[dict]) -> list[dict]:
     return trimmed
 
 
+#: 证据里属于“元信息”而非业务数据的键：SQL 原文、字段名、截断说明与字节数。
+#: 压体积时不当业务值保留；取证据数字时也不从这里取（统一由本常量约束）。
+EVIDENCE_META_KEYS = frozenset({"sql", "columns", "keys", "note", "bytes_before", "truncated"})
+
+#: 明细被省略时给出的说明：明确要求缩小范围，而不是只回一个字节数。
+NARROW_NOTE = (
+    "结果超过证据体积上限 4096 字节，明细已省略；"
+    "请缩小查询范围（收窄日期区间、门店/商品或减少返回字段）后重新查询"
+)
+
+
 def fit_evidence(result: Any, limit: int = MAX_EVIDENCE_BYTES) -> Any:
     """把 ``result`` 压到 ``limit`` 字节以内（保持 JSON 可序列化）。
 
-    逐级降级，越靠后的手段越有损：
+    逐级降级，越靠后的手段越有损，但**始终保住可核验的业务值**：
 
     1. 已经够小就原样返回；
     2. 若形如 ``{"rows": [...]}``，逐步截断 ``rows``；
     3. 过长的字符串字段截断到 ``MAX_CELL_CHARS``；
-    4. 仍超限就丢掉明细，只留一个说明用的摘要（行数/列名）。
+    4. 仍超限就丢明细、**保留标量业务值**（``net_revenue``/``orders``/``row_count`` …），
+       并附上明确的“请缩小查询范围”提示——不返回只有字节数的无语义摘要；
+    5. 最坏情况只保留数值型标量 + 提示（仍不出现“只剩字节数”的摘要）。
     """
     if _size(result) <= limit:
         return result
 
     if isinstance(result, dict) and isinstance(result.get("rows"), list):
         rows = result["rows"]
-        # 逐行裁到 1 行为止；单行仍超限就交给后面截断字段/退化成摘要。
+        # 逐行裁到 1 行为止；单行仍超限就交给后面截字段/丢明细。
         while len(rows) > 1 and _size(dict(result, rows=rows)) > limit:
             rows = rows[: max(1, int(len(rows) * 0.8))]
         candidate = dict(result, rows=rows, truncated=True)
         if _size(candidate) <= limit:
             return candidate
         result = candidate
-
-    # 截断过长的字符串字段
-    if isinstance(result, dict) and isinstance(result.get("rows"), list):
         result = dict(result, rows=_trim_cells(result["rows"]))
         if _size(result) <= limit:
             return result
 
-    # 最后一招：只留摘要，保证一定能落进上限
+    # 4) 丢明细、保标量业务值
     if isinstance(result, dict):
-        summary = {
-            "note": "结果过大，已按契约上限截断",
-            "keys": list(result.keys())[:MAX_SQL_COLUMNS],
-            "bytes_before": _size(result),
+        scalars = {
+            key: value
+            for key, value in result.items()
+            if not isinstance(value, (dict, list, tuple)) and str(key) != "sql"
         }
-        return summary
-    text = _dump(result)
-    while len(text.encode("utf-8")) > limit and len(text) > 32:
-        text = text[: int(len(text) * 0.8)]
-    return text
+        slim = dict(scalars, truncated=True, note=NARROW_NOTE)
+        if "rows" in result:
+            slim["rows"] = []
+        if _size(slim) <= limit:
+            return slim
+        result = slim
+
+    # 5) 兜底：只留数值型标量 + 提示，绝不返回“只有字节数”的摘要
+    numeric: dict = {}
+    if isinstance(result, dict):
+        numeric = {
+            key: value
+            for key, value in result.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
+    fallback = dict(numeric, note=NARROW_NOTE, truncated=True)
+    if _size(fallback) <= limit:
+        return fallback
+    return {"note": NARROW_NOTE, "truncated": True}

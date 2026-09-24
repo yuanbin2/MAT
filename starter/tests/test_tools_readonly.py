@@ -21,6 +21,7 @@ from kbqa.sqlguard import (
     MAX_SQL_ROWS,
     check_readonly_sql,
     fit_evidence,
+    internal_objects,
 )
 from kbqa.tools import DataTools
 
@@ -185,3 +186,106 @@ def test_fit_evidence_shrinks_oversized_result():
 def test_fit_evidence_leaves_small_result_untouched():
     small = {"net_revenue": 162414.0, "orders": 4446}
     assert fit_evidence(small) == small
+
+
+# -- SQLite 内部对象：一律不许访问 ---------------------------------------------
+
+
+INTERNAL_SQL = [
+    "SELECT name FROM sqlite_master",
+    'SELECT * FROM "sqlite_master"',
+    "SELECT * FROM [sqlite_master]",
+    "SELECT * FROM sqlite_schema",
+    "SELECT * FROM sqlite_temp_master",
+    "SELECT * FROM pragma_table_info('sales_clean')",
+    "SELECT * FROM pragma_database_list",
+]
+
+
+@pytest.mark.parametrize("sql", INTERNAL_SQL)
+def test_internal_objects_rejected(db, sql):
+    tools = DataTools(db)
+    before = tools.valid_sales_rows()
+    out = tools.run_sql(sql)
+    assert "error" in out, "%r 本应被拒绝" % sql
+    assert any("内部对象" in problem for problem in out["problems"])
+    assert tools.valid_sales_rows() == before
+
+
+def test_internal_object_check_catches_quoted_names():
+    # 词法骨架会把带引号的标识符抹掉，所以内部对象检查另跑一遍“去引号”原文。
+    assert internal_objects('SELECT * FROM "sqlite_master"') == ["sqlite_master"]
+    assert internal_objects("SELECT * FROM `pragma_table_info`") == ["pragma_table_info"]
+    assert internal_objects("SELECT COUNT(*) FROM sales_clean") == []
+
+
+def test_business_queries_still_allowed(db):
+    tools = DataTools(db)
+    for sql in (
+        "SELECT COUNT(*) AS n FROM sales_clean",
+        "SELECT store_id, SUM(amount_cents) AS net FROM sales_clean GROUP BY store_id",
+        "SELECT s.order_id, s.amount_cents FROM sales_clean s WHERE s.store_id = 'S01'",
+        "WITH t AS (SELECT store_id FROM sales_clean) SELECT COUNT(*) AS n FROM t",
+    ):
+        out = tools.run_sql(sql)
+        assert "error" not in out, (sql, out)
+        assert out["row_count"] >= 0
+
+
+def test_run_sql_reads_bounded_rows(tmp_path):
+    """有界读取：1000 行只取 201 行判断超限，返回恰好 MAX_SQL_ROWS 行。"""
+    path = tmp_path / "many.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE t (i INTEGER)")
+    conn.executemany("INSERT INTO t VALUES (?)", [(i,) for i in range(1000)])
+    conn.commit()
+    conn.close()
+
+    tools = DataTools(path)
+    out = tools.run_sql("SELECT i FROM t")
+    assert out["row_count"] == MAX_SQL_ROWS
+    assert out["truncated"] is True
+
+
+# -- 超限结果：保住可核验的业务值，并明确要求缩小范围 ---------------------------
+
+
+def test_fit_evidence_preserves_business_scalars():
+    huge = {
+        "net_revenue": 162414.0,
+        "orders": 4446,
+        "row_count": 50,
+        "rows": [{("c%d" % i): "z" * 300 for i in range(40)} for _ in range(50)],
+    }
+    fitted = fit_evidence(huge)
+    assert len(json.dumps(fitted, ensure_ascii=False).encode("utf-8")) <= MAX_EVIDENCE_BYTES
+    # 明细可以丢，但业务标量必须留下，且给出明确的“请缩小范围”说明
+    assert fitted["net_revenue"] == 162414.0
+    assert fitted["orders"] == 4446
+    assert "缩小查询范围" in fitted.get("note", "")
+
+
+def test_fit_evidence_never_returns_bytes_only_summary():
+    # 旧实现会退化成 {"note":..., "keys":..., "bytes_before":N} 这种只有字节数的摘要
+    fitted = fit_evidence({"blob": "q" * 20000})
+    blob = json.dumps(fitted, ensure_ascii=False)
+    assert "缩小查询范围" in blob
+    assert "bytes_before" not in fitted
+    assert "keys" not in fitted
+
+
+def test_oversized_run_sql_keeps_scalars_and_asks_to_narrow(tmp_path):
+    path = tmp_path / "wide.db"
+    conn = sqlite3.connect(path)
+    columns = ", ".join("c%d TEXT" % i for i in range(60))
+    conn.execute("CREATE TABLE wide (%s)" % columns)
+    conn.execute("INSERT INTO wide DEFAULT VALUES")
+    conn.commit()
+    conn.close()
+
+    tools = DataTools(path)
+    out = tools.run_sql("SELECT * FROM wide")
+    assert "error" not in out
+    assert len(json.dumps(out, ensure_ascii=False).encode("utf-8")) <= MAX_EVIDENCE_BYTES
+    if out.get("note"):
+        assert "缩小查询范围" in out["note"]

@@ -129,6 +129,22 @@ def test_run_tool_allows_readonly_sql(client):
     assert result["rows"][0]["n"] == service().tools.valid_sales_rows()
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT name FROM sqlite_master",
+        'SELECT * FROM "sqlite_master"',
+        "SELECT * FROM sqlite_schema",
+        "SELECT * FROM pragma_table_info('sales_clean')",
+    ],
+)
+def test_run_tool_rejects_internal_objects_over_api(client, sql):
+    from kbqa.server import service
+
+    denied = service().run_tool("run_sql", {"sql": sql})
+    assert "error" in denied
+
+
 def test_chat_data_evidence_within_limit(client):
     response = client.post(
         "/api/chat", json={"session_id": "t", "question": "6 月各门店的净营业额"}
