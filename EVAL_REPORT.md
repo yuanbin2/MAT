@@ -101,6 +101,37 @@
 
 无。公开题库 55 题全部通过。
 
+## 第三关边界加固后复测（mock 与 live 桩件分开报告）
+
+本轮加固：live 数字提取与白名单来源、`run_sql` 内部对象与有界读取、超限结果保留业务值、
+模型异常全路径 Key 脱敏（详见 `DEBUG_LOG.md` 分层 5 的 D17–D20）。
+
+### 1. mock 模式（无 Key 降级）——公开评测
+
+- **运行命令**：
+  ```bash
+  python eval/run_eval.py --base-url http://localhost:8001 \
+      --questions eval/public_questions.jsonl --out eval/reports/stage3_boundary
+  ```
+- **关键配置**：无 Key（`llm_mode=mock`）；`valid_sales_rows=18290`、`kb_docs=35`、`kb_chunks=180`、缓存键 `b0da151dbd8b`。
+- **总分**：**100.00 / 100**（55 题全绿，分类得分与第 3 项一致）——**无回归**。
+
+### 2. live 桩件（不联网、不依赖真实 Key）——单元测试
+
+| 专项 | 命令 | 结果 |
+|---|---|---|
+| 全部后端测试 | `pytest tests -q` | **140 passed** |
+| live 取证与数字校验 | `pytest tests/test_live_evidence.py tests/test_llm_trace.py -q` | **28 passed** |
+| 只读 / 内部对象 / 有界读取 | `pytest tests/test_tools_readonly.py -q` | **34 passed** |
+| 前端（未改动，确认无回归） | `npm run build` | ✓ built in 7.70s |
+
+其中 live 桩件覆盖的关键断言：中文紧贴数字（`是9999999元`）与负数/百分比被识别、`S02/P06/KB-013` 被排除；
+“结果 100 + 回答 9999999”必须回退；“SQL 条件含 9999999、结果为 NULL”不放行；字段名/截断说明里的数字不放行；
+超限结果保留业务标量并给出“请缩小查询范围”；非法 JSON 回显 Key 时 trace 与回答里都不出现 Key。
+
+> 说明：live 桩件用打桩替掉模型，验证的是**代码侧的取证闸门与脱敏**，不代表真实模型的回答质量；
+> 真实模型分数需配置 Key 后另跑（见下方“关于 live 模式”）。
+
 ## 关于 live 模式
 
 未配置真实 LLM Key，因此未提供 live 分数；以上分数即无 Key 降级模式的完整结果。

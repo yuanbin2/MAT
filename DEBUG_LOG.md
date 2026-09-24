@@ -239,6 +239,95 @@
 
 ---
 
+## 分层 5：第三关边界加固（数字提取 / 内部对象 / 有界读取 / 异常脱敏）
+
+### D17 数字提取漏识别“中文紧贴数字”与负数
+
+- **现象**：回答里“净营业额是9999999元”这种写法，中文紧贴数字时数字**根本没被提取**，
+  于是“数字是否造假”的校验被整段跳过——等于没有校验。
+- **假设**：判断“数字是否紧贴编号”用了 `str.isalnum()`；而 Python 里汉字
+  `"是".isalnum()` 也是 `True`，所以中文前一位也被当成“编号的一部分”跳过了。
+- **验证（红，检出 `6512abe` worktree）**：`_numbers_in("净营业额是9999999元")` → `[]`；
+  `_numbers_in("退款是-500元")` → `[]`。同时 `S02`/`P06`/`KB-013` 的排除是**正确**的（`[]`）。
+- **根因**：`starter/kbqa/live.py::_numbers_in` 用 `cleaned[start-1].isalnum()` 判定紧贴。
+- **修复**：紧贴判断只按 **ASCII** 字母/数字/下划线（`S02`/`P06`/`KB-013` 仍被排除），
+  中文紧贴照常识别；数字正则支持半角/全角负号（`-500`、`－500`）与百分比（`25.3%`）。
+- **回归测试**：`tests/test_live_evidence.py`（`test_numbers_chinese_adjacent_are_recognized`、
+  `test_numbers_negative_are_recognized`、`test_numbers_percentage_are_recognized`、
+  `test_identifier_numbers_are_excluded`、`test_date_like_tokens_are_ignored`）。
+- **题目要求的回归**：`test_regression_result_100_must_reject_answer_9999999`——
+  证据只有 `net_revenue=100`、回答写“净营业额是9999999元” → 必须回退模板回答（红测里旧实现**直接放行**）。
+
+### D18 数字白名单来源过宽：从 SQL 文本、入参、字段名、截断说明取数
+
+- **现象**：白名单是把整个 evidence 项 `json.dumps` 后取数，于是 `params`（入参）、
+  `result.sql`（SQL 原文）、`result.columns`（字段名）、`result.note`（截断说明里的字节数）
+  里的数字都被当成“可放行”——模型把 SQL 条件里的数字搬进回答就能过。
+- **假设**：`_allowed_numbers` 用 `_numbers_in(json.dumps(item))`，没有区分“数据值”与“元信息”。
+- **验证（红，`6512abe` worktree）**：
+  - SQL 条件含 9999999、查询结果为 `NULL`：回答“净营业额是9999999元” → 旧实现**放行**；
+  - 字段名 `total_9999999` / 截断说明 `bytes_before=8888888`：回答对应数字 → 旧实现**放行**。
+- **根因**：`starter/kbqa/live.py::_allowed_numbers` 的取数来源。
+- **修复**：白名单只读 `evidence[i]["result"]` 的**数据值**（`_data_numbers` 递归取值、跳过字典键），
+  并跳过元信息键 `EVIDENCE_META_KEYS = {sql, columns, keys, note, bytes_before, truncated}`；
+  入参 `params` 完全不参与取数。
+- **回归测试**：`test_whitelist_ignores_sql_text_and_params`（含题目要求的
+  “SQL 条件含 9999999、结果为 NULL”用例）、`test_whitelist_ignores_column_names_and_notes`、
+  `test_whitelist_uses_actual_result_values`、`test_whitelist_reads_retrieved_chunks_only`。
+
+### D19 `run_sql` 可访问 SQLite 内部对象；结果集无界读取；超限只剩字节数摘要
+
+- **现象**：三处边界都不够严：
+  1. `SELECT name FROM sqlite_master`、`SELECT * FROM pragma_table_info(...)` 可以拿到库内部结构；
+  2. `run_sql` 用 `cursor.fetchall()` 把**整个结果集**读进内存再截断；
+  3. `fit_evidence` 超限时退化成 `{"note":…, "keys":…, "bytes_before":N}`——
+     只剩字节数，业务值全丢，等于“没有证据”。
+- **假设**：闸门只查了写操作；读取用 `fetchall`；压缩兜底没有保住标量业务值。
+- **验证（红，`6512abe` worktree）**：
+  - `run_sql("SELECT name FROM sqlite_master")` → **放行**（返回库结构）；
+  - `run_sql("SELECT * FROM pragma_table_info('t')")` → **放行**；
+  - 对 `{"net_revenue":162414.0, "orders":4446, "rows":[…超长…]}` 调 `fit_evidence`
+    → 返回 `keys=['bytes_before','keys','note']`、`net_revenue=None`（业务值丢失）；
+  - `grep -n "fetchall\|fetchmany" tools.py` → 旧第 105 行是 `cursor.fetchall()`（无界读取）。
+- **根因**：`sqlguard.check_readonly_sql` 缺内部对象检查；`tools.run_sql` 用 `fetchall`；
+  `sqlguard.fit_evidence` 的兜底摘要只有元信息。
+- **修复**：
+  1. `check_readonly_sql` 增加 `internal_objects()`：在“去掉引号”的原文上扫 `sqlite_*` / `pragma_*`
+     （补上词法骨架会抹掉带引号标识符的盲区），命中即拒绝；
+  2. `run_sql` 改 `cursor.fetchmany(MAX_SQL_ROWS + 1)` **有界读取**，并回报 `columns_total`；
+  3. `fit_evidence` 逐级降级但**始终保住标量业务值**（截行 → 截字段 → 丢明细留标量 →
+     只留数值标量），并附带明确的“请缩小查询范围（收窄日期/门店/商品或减少返回字段）”，
+     **不再返回只有字节数的摘要**。
+- **回归测试**：`tests/test_tools_readonly.py`（`test_internal_objects_rejected` 7 条参数化、
+  `test_internal_object_check_catches_quoted_names`、`test_business_queries_still_allowed`、
+  `test_run_sql_reads_bounded_rows`、`test_fit_evidence_preserves_business_scalars`、
+  `test_fit_evidence_never_returns_bytes_only_summary`、`test_oversized_run_sql_keeps_scalars_and_asks_to_narrow`）
+  与接口级 `tests/test_api.py::test_run_tool_rejects_internal_objects_over_api`。
+
+### D20 模型异常路径未脱敏：非法 JSON 回显 Key 会写进 trace
+
+- **现象**：响应不是合法 JSON 时，异常信息写的是**原始响应正文**；如果模型/网关把 Key
+  回显在正文里（调试信息、错误页），Key 会经由 `LLMError.detail` → `trace.step("answer_live_failed")`
+  与 `trace.errors` 落进 `/api/trace`（此前只对 `record["detail"]` 做了脱敏，异常这条路径漏了）。
+- **假设**：脱敏只覆盖了 trace 记录字段，没有覆盖抛出的异常信息，也没有落盘前的统一闸门。
+- **验证（红，`6512abe` worktree，端到端跑 Service）**：
+  `Service.chat` 在 live 模式下抛 `LLMError("bad_json", …含 Key…)`：
+  `/api/trace` 里出现 Key = **True**，泄漏位置 `['answer_live_failed', 'response']` 且 `errors` 也含 Key。
+  单测层面：`SECRET in str(exc)` = **True**（旧实现）。
+- **根因**：`starter/kbqa/llm.py` 的 `bad_json`/`timeout`/`transport` 分支抛出原始正文；
+  `starter/kbqa/trace.py::TraceStore.save` 没有脱敏入口。
+- **修复**：
+  1. 抽出公共 `llm.redact_secret(text, secret)`（替换真实 Key + `Bearer ***` + `sk-***` 正则），
+     `_mask` 委托它，**所有**抛出路径（超时/网络/非法 JSON/HTTP 错误码）都先脱敏；
+  2. `TraceStore.save(trace, redactor=...)` 增加落盘前的统一闸门；
+  3. `Service` 用 `_redact_payload` 递归脱敏整份 trace 后落盘，并在捕获 `LLMError` 时再次脱敏 `detail`。
+- **回归测试**：`tests/test_llm_trace.py`（`test_bad_json_echoing_key_is_masked`、
+  `test_timeout_and_transport_details_are_masked`、`test_trace_store_redacts_on_save`、
+  `test_service_trace_masks_key_on_llm_error` 端到端）。
+  修复后端到端断言：`/api/trace` 与回答里都不含 Key，同时错误仍在 trace 里可见（可观察性不因脱敏丢失）。
+
+---
+
 ## 尚未解决 / 已知边界
 
 - 无 LLM Key 的 mock 降级模式已满分；live 模式（配置真实模型后）未在本机对真实 API 跑过，
@@ -247,5 +336,7 @@
   （完整请求/响应入 trace、Key 脱敏）用打桩做成了 13 个单元测试，接入真 Key 后可直接复跑。
 - 检索为纯 BM25 + 别名扩写，未引入向量检索；跨语言靠别名表的 distinctive token（如 `salmon`→三文鱼poke），
   覆盖了公开题库，但对知识库之外的近义表述仍依赖词典。
-- `run_sql` 是词法闸门而非 SQL 解析器：它按 token 判定（已排除注释/字符串误伤），
-  但真正的最后防线仍是连接层的 `mode=ro`——两者同时生效，任一层单独都不足。
+- `run_sql` 是词法闸门而非 SQL 解析器：它按 token 判定（已排除注释/字符串误伤）并额外拦住
+  `sqlite_*`/`pragma_*` 内部对象，但真正的最后防线仍是连接层的 `mode=ro`——两者同时生效，任一层单独都不足。
+- live 的“数字必须来自真实查询”是**面向数值的白名单**：日期类写法与编号（S02/P06/KB-013）不参与校验，
+  因此日期本身不需要证据支撑；这是一处有意的取舍，不是漏洞。

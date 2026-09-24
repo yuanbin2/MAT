@@ -53,12 +53,14 @@ npm run dev               # 前端：http://localhost:5173，/api 自动代理�
 
 ```bash
 cd starter
-make test                 # 后端测试（108 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
-                          # 只读 SQL 闸门、证据体积上限、live 取证、trace 脱敏、loader doc_id 等
+make test                 # 后端测试（140 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
+                          # 只读 SQL 闸门、SQLite 内部对象、有界读取、证据体积、live 数字取证、
+                          # trace 脱敏、loader doc_id 等
 ```
 
-> `run_sql` 只接受单条只读查询（`SELECT`/`WITH … FROM`）；DataTools 的连接本身也是只读的
-> （URI `mode=ro` + `PRAGMA query_only`）。写入与 `ATTACH` 一律拒绝，见 `DEBUG_LOG.md` D12。
+> `run_sql` 只接受单条只读查询（`SELECT`/`WITH … FROM`），并拒绝访问 `sqlite_master`/`sqlite_schema`/
+> `pragma_*` 等内部对象；DataTools 的连接本身也是只读的（URI `mode=ro` + `PRAGMA query_only`）。
+> 写入与 `ATTACH` 一律拒绝，见 `DEBUG_LOG.md` D12、D19。
 
 ## 跑公开评测
 
