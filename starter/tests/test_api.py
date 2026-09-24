@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
+
+from kbqa.sqlguard import MAX_EVIDENCE_BYTES
 
 
 def test_health_ok(client):
@@ -86,3 +90,50 @@ def test_chat_trace_id(client):
 
 def test_trace_unknown(client):
     assert client.get("/api/trace/nope").status_code == 404
+
+
+# -- 工具层：只读约束与证据体积上限（接口级） -----------------------------------
+
+
+def test_run_tool_evidence_within_contract_limit(client):
+    from kbqa.server import service
+
+    result = service().run_tool("by_store", {"start": "2026-06-01", "end": "2026-06-30"})
+    assert "error" not in result
+    assert len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= MAX_EVIDENCE_BYTES
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DELETE FROM sales_clean",
+        "UPDATE sales_clean SET qty = 0",
+        "DROP TABLE sales_clean",
+        "ATTACH DATABASE 'evil.db' AS evil",
+    ],
+)
+def test_run_tool_rejects_writes_over_api(client, sql):
+    from kbqa.server import service
+
+    rows_before = service().tools.valid_sales_rows()
+    denied = service().run_tool("run_sql", {"sql": sql})
+    assert "error" in denied
+    assert service().tools.valid_sales_rows() == rows_before
+
+
+def test_run_tool_allows_readonly_sql(client):
+    from kbqa.server import service
+
+    result = service().run_tool("run_sql", {"sql": "SELECT COUNT(*) AS n FROM sales_clean"})
+    assert "error" not in result
+    assert result["rows"][0]["n"] == service().tools.valid_sales_rows()
+
+
+def test_chat_data_evidence_within_limit(client):
+    response = client.post(
+        "/api/chat", json={"session_id": "t", "question": "6 月各门店的净营业额"}
+    )
+    assert response.status_code == 200
+    for item in response.json()["data_evidence"]:
+        blob = json.dumps(item["result"], ensure_ascii=False).encode("utf-8")
+        assert len(blob) <= MAX_EVIDENCE_BYTES

@@ -81,8 +81,10 @@ TOOLS = [
     ),
     _fn(
         "run_sql",
-        "在清洗表上执行一条 SQL，工具覆盖不到的查法用这个。",
-        {"sql": {"type": "string", "description": "要执行的 SQL 语句"}},
+        "在清洗表上执行一条只读 SQL，工具覆盖不到的查法用这个。"
+        "只接受单条 SELECT（或 WITH … SELECT）并且必须带 FROM；"
+        "任何写操作或库级操作（DELETE/UPDATE/DROP/CREATE/ATTACH/PRAGMA 等）都会被拒绝。",
+        {"sql": {"type": "string", "description": "要执行的 SQL 语句（单条只读查询）"}},
         ["sql"],
     ),
     _fn(

@@ -13,6 +13,7 @@ from .hybrid import HybridAnswers
 from .planner import Plan
 from .retriever import Retriever, SearchResult
 from .schemas import Answer
+from .sqlguard import fit_evidence
 from .tokenizer import content_tokens, tokenize
 
 #: 拒答闸门。两个互补的信号：
@@ -52,7 +53,8 @@ class Answerer(HybridAnswers):
         trimmed = result
         if name == "daily_metrics" and len(result.get("days", [])) > 31:
             trimmed = {"days": result["days"][:31], "days_total": len(result["days"])}
-        evidence.append({"tool": name, "params": params, "result": trimmed})
+        # 契约硬上限：单条 data_evidence.result 序列化后不超过 4096 字节。
+        evidence.append({"tool": name, "params": params, "result": fit_evidence(trimmed)})
         return result
 
     def _scope(self, plan: Plan, window=None) -> str:

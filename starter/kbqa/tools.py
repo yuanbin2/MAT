@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .cleaning import open_readonly
+from .sqlguard import (
+    MAX_SQL_COLUMNS,
+    MAX_SQL_ROWS,
+    check_readonly_sql,
+    fit_evidence,
+)
 
 METRIC_FIELDS = ("net_revenue", "refund_amount", "orders", "aov", "qty")
 
@@ -73,11 +79,43 @@ class DataTools:
         return int(self.conn.execute("SELECT COUNT(*) FROM sales_clean").fetchone()[0])
 
     def run_sql(self, sql: str) -> dict:
-        """执行一条 SQL。工具覆盖不到的查法，让模型自己写。"""
+        """执行一条**只读** SQL。工具覆盖不到的查法，让模型自己写。
+
+        安全约束（连接级 ``mode=ro`` + 这里的词法闸门，缺一不可）：
+
+        - 只接受**一条**以 ``SELECT``/``WITH`` 开头、真的带 ``FROM`` 的查询；
+        - 任何写操作或库级操作（``DELETE/UPDATE/DROP/CREATE/ATTACH/PRAGMA`` …）
+          在**执行前**就被拒绝，返回结构化 ``error``，不抛异常、不碰数据库；
+        - 结果自带体积上限：行数、列数、字节数都封顶，单条 ``result`` ≤ 4096 字节，
+          保证它作为 ``data_evidence`` 时符合契约硬上限。
+        """
+        problems = check_readonly_sql(sql)
+        if problems:
+            return {
+                "error": "只允许单条只读查询（SELECT/WITH … FROM），已拒绝执行",
+                "sql": sql,
+                "problems": problems,
+            }
+        # 这里的连接是只读连接（mode=ro + query_only）；即使闸门被绕过，
+        # 写入也会在 SQLite 层被拒。
         cursor = self.conn.execute(sql)
-        rows = [dict(row) for row in cursor.fetchall()] if cursor.description else []
-        self.conn.commit()
-        return {"sql": sql, "rows": rows[:50], "row_count": len(rows)}
+        if cursor.description is None:
+            return {"error": "这条语句没有返回结果集，不能作为证据", "sql": sql}
+        columns = [str(item[0]) for item in cursor.description][:MAX_SQL_COLUMNS]
+        fetched = cursor.fetchall()
+        truncated_rows = len(fetched) > MAX_SQL_ROWS
+        rows = [
+            {column: row[index] for index, column in enumerate(columns)}
+            for row in fetched[:MAX_SQL_ROWS]
+        ]
+        result = {
+            "sql": sql,
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows),
+            "truncated": truncated_rows,
+        }
+        return fit_evidence(result)
 
     def stores(self) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM stores ORDER BY store_id")]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import time
 from typing import Any, Optional
 
@@ -18,6 +19,7 @@ from .llm import LLMClient, LLMError
 from .planner import Planner
 from .retriever import Retriever
 from .sessions import SessionStore
+from .sqlguard import fit_evidence
 from .toolspec import TOOL_NAMES, TOOLS
 from .tools import DataTools
 from .trace import Trace, TraceStore
@@ -124,8 +126,9 @@ class Service:
         try:
             if name == "search_kb":
                 return self.retrieve(cleaned["query"], cleaned.get("top_k", 5))
-            return getattr(self.tools, name)(**cleaned)
-        except (TypeError, ValueError) as exc:
+            # 所有工具输出都压到契约上限内，保证它作为 data_evidence 时不会超标。
+            return fit_evidence(getattr(self.tools, name)(**cleaned))
+        except (TypeError, ValueError, sqlite3.Error) as exc:
             return {"error": "工具 %s 执行失败：%s" % (name, exc)}
 
     # -- 问答 -------------------------------------------------------------------

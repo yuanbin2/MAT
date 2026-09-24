@@ -148,9 +148,22 @@ class CleaningReport:
 
 
 def open_readonly(path: Path) -> sqlite3.Connection:
-    """打开数据库。"""
-    conn = sqlite3.connect(path.as_posix(), check_same_thread=False)
+    """以**真正只读**的方式打开数据库。
+
+    两层保护：
+
+    1. URI 上用 ``mode=ro``：SQLite 在连接层面就拒绝写入（DELETE/UPDATE/DROP/
+       CREATE 一律 ``attempt to write a readonly database``）；
+    2. 再叠加 ``PRAGMA query_only = ON`` 作为第二道闸，防止任何意外的写入意图。
+
+    注意：``mode=ro`` 并不拒绝 ``ATTACH``（实测仍可附加别的库），所以连接级只读
+    一定要配合按词法判断的 SQL 闸门（见 ``sqlguard.check_readonly_sql``），
+    两者缺一不可。
+    """
+    uri = path.resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only = ON")
     return conn
 
 
