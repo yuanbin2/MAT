@@ -237,7 +237,13 @@ class Retriever:
             if reason:
                 excluded.add(doc_id)
                 filtered.append({"doc_id": doc_id, "reason": reason})
-        allowed = set(range(len(self.index.chunks)))
+        # 版本/门店过滤必须在打分之前：被排除的文档根本不该进入候选，
+        # 否则它们会占用 top_k 名额、取完再删，导致结果不足 top_k。
+        allowed = set(
+            position
+            for position in range(len(self.index.chunks))
+            if self.index.chunks[position].doc_id not in excluded
+        )
 
         scores = self.index.score_terms(self._weights(query), allowed)
         concepts, expansions = self._concept_scores(query, allowed)
@@ -261,7 +267,6 @@ class Retriever:
             )
         adjusted.sort(key=lambda item: (-item[0], item[1]))
 
-        ordered = [self.index.chunks[position] for _, position in adjusted]
         hits: list[Hit] = []
         taken: set[int] = set()
         per_doc: dict[str, int] = {}
@@ -271,10 +276,8 @@ class Retriever:
                 continue
             per_doc[chunk.doc_id] = per_doc.get(chunk.doc_id, 0) + 1
             taken.add(position)
-            hit = self._hit(position, score, filtered)
-            # 第几条命中就取排序里的第几篇文档。
-            hit.doc_id = ordered[len(hits)].doc_id
-            hits.append(hit)
+            # doc_id / chunk_id / text 都来自同一块真实片段，不做任何重写。
+            hits.append(self._hit(position, score, filtered))
             if len(hits) >= top_k:
                 break
 
@@ -303,8 +306,6 @@ class Retriever:
             # 契约 §4 还要求“按相关性从高到低”：补齐之后整体再排一次。
             # 每篇文档只占一格是挑片段的规则，不是排序的规则。
             hits.sort(key=lambda hit: -hit.score)
-        # 取够 top-k 之后，再把过滤掉的那些版本去掉。
-        hits = [hit for hit in hits if hit.doc_id not in excluded]
 
         return SearchResult(
             hits=hits,

@@ -74,7 +74,12 @@ class Answerer(HybridAnswers):
         candidates = self._candidates(plan, result, require_value=True)
         if not candidates:
             candidates = self._candidates(plan, result, require_value=False)
-        candidates.sort(key=lambda item: (round(item["score"], 2), item["effective_from"]))
+        # 分数从高到低；分数接近时以生效日期更新的为准（营业时间总表和后来的
+        # 调整通知会互相矛盾，要用新的那一份）。
+        candidates.sort(
+            key=lambda item: (round(item["score"], 2), item["effective_from"] or ""),
+            reverse=True,
+        )
         lines: list[str] = []
         citations: list[dict] = []
         used_terms: set[str] = set()
@@ -311,12 +316,11 @@ class Answerer(HybridAnswers):
     # -- 纯文档 -----------------------------------------------------------------
 
     def _context(self, result: SearchResult) -> str:
-        """把命中的那篇文档原样拼进来，答案就在里面，别漏了。"""
-        blocks: list[str] = []
-        for hit in result.hits[:1]:
-            for chunk in self.retriever.index.chunks_of(hit.doc_id):
-                blocks.append(chunk.text)
-        return ("\n".join(blocks) + "\n") if blocks else ""
+        """整篇文档贴进回答会超长、触发数字轰炸，也违反契约的引用要求。
+
+        这里只返回空串：真正要引用的短原文由 ``_doc_block`` 逐字选取。
+        """
+        return ""
 
     def _should_refuse(self, plan: Plan, confidence: float, top_score: float) -> Optional[str]:
         """三个信号一起判断“知识库里到底有没有这件事”。"""
