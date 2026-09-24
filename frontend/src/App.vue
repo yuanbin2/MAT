@@ -7,6 +7,7 @@ import TrendChart from './components/TrendChart.vue'
 import TopProducts from './components/TopProducts.vue'
 import DataQuality from './components/DataQuality.vue'
 import GlossaryModal from './components/GlossaryModal.vue'
+import ChatAssistant from './components/ChatAssistant.vue'
 import { fetchDataQuality, fetchDaily, fetchStores, fetchSummary, fetchTopProducts } from './api'
 import type {
   DataQuality as DataQualityInfo,
@@ -16,6 +17,9 @@ import type {
   TopProduct,
 } from './types'
 import { lastFullMonth } from './format'
+
+// ---- 页面切换 ----
+const view = ref<'overview' | 'assistant'>('overview')
 
 // ---- 元数据（门店列表 + 数据质量，加载一次）----
 const stores = ref<Store[]>([])
@@ -160,22 +164,24 @@ onMounted(loadMeta)
 
 <template>
   <div class="layout">
-    <Sidebar />
+    <Sidebar :active="view" @navigate="view = $event" />
 
     <div class="main">
       <header class="topbar">
         <div>
-          <h1 class="topbar__title">经营总览</h1>
-          <div class="topbar__sub">
+          <h1 class="topbar__title">{{ view === 'overview' ? '经营总览' : 'AI 助手' }}</h1>
+          <div v-if="view === 'overview'" class="topbar__sub">
             <span>数据覆盖范围 <span class="num">{{ dataRange }}</span></span>
             <span class="topbar__dot">·</span>
             <span>当前报表区间 <span class="num">{{ appliedRange }}</span></span>
           </div>
         </div>
-        <button class="glossary-btn" @click="glossaryOpen = true">指标口径</button>
+        <button v-if="view === 'overview'" class="glossary-btn" @click="glossaryOpen = true">
+          指标口径
+        </button>
       </header>
 
-      <main class="content">
+      <main v-if="view === 'overview'" class="content">
         <FilterBar
           v-model:start="draftStart"
           v-model:end="draftEnd"
@@ -212,8 +218,10 @@ onMounted(loadMeta)
             当前数据集清洗后没有可展示的经营数据，请确认 data/ 目录已就绪后执行重建。
           </div>
         </div>
+      </main>
 
-        <!-- 第三关：AI 助手将在此处接入对话框，组件结构预留，暂不渲染占位内容 -->
+      <main v-else class="content content--chat">
+        <ChatAssistant />
       </main>
     </div>
 
@@ -232,17 +240,18 @@ onMounted(loadMeta)
   min-width: 0;
   display: flex;
   flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
   padding: 18px 28px;
   background: var(--c-card);
   border-bottom: 1px solid var(--c-border);
-  position: sticky;
-  top: 0;
   z-index: 10;
 }
 
@@ -283,6 +292,9 @@ onMounted(loadMeta)
 }
 
 .content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 20px 28px 32px;
   display: flex;
   flex-direction: column;
@@ -290,6 +302,10 @@ onMounted(loadMeta)
   max-width: 1440px;
   width: 100%;
   margin: 0 auto;
+}
+
+.content--chat {
+  gap: 0;
 }
 
 .error-banner {

@@ -51,3 +51,36 @@ export interface DataQuality {
   data_period: { start: string | null; end: string | null }
   kb_warnings: string[]
 }
+
+export type AnswerType = 'data' | 'doc' | 'hybrid' | 'refusal' | 'clarify'
+
+export interface Citation {
+  doc_id: string
+  quote: string
+}
+
+export interface DataEvidence {
+  tool?: string
+  params?: Record<string, unknown>
+  result?: unknown
+  sql?: string
+  [key: string]: unknown
+}
+
+export interface ChatResponse {
+  answer: string
+  answer_type: AnswerType
+  citations: Citation[]
+  data_evidence: DataEvidence[]
+  trace_id: string
+}
+
+export interface HealthInfo {
+  status: string
+  llm_mode: string
+  kb_docs: number
+  valid_sales_rows: number
+  today: string
+  data_period: { start: string | null; end: string | null }
+  [key: string]: unknown
+}

@@ -1,5 +1,7 @@
 <script setup lang="ts">
-// 侧栏：只放已实现页面（经营总览），并为第三关的 AI 助手预留位置。
+// 侧栏：经营总览 与 AI 助手 两个页面。
+defineProps<{ active: string }>()
+defineEmits<{ (e: 'navigate', view: 'overview' | 'assistant'): void }>()
 </script>
 
 <template>
@@ -14,7 +16,12 @@
 
     <nav class="nav">
       <div class="nav__label">报表</div>
-      <a class="nav__item nav__item--active" href="#">
+      <a
+        class="nav__item"
+        :class="{ 'nav__item--active': active === 'overview' }"
+        href="#"
+        @click.prevent="$emit('navigate', 'overview')"
+      >
         <span class="nav__dot" aria-hidden="true"></span>
         经营总览
       </a>
@@ -22,11 +29,15 @@
 
     <div class="nav">
       <div class="nav__label">智能</div>
-      <div class="nav__item nav__item--soon">
+      <a
+        class="nav__item"
+        :class="{ 'nav__item--active': active === 'assistant' }"
+        href="#"
+        @click.prevent="$emit('navigate', 'assistant')"
+      >
         <span class="nav__dot" aria-hidden="true"></span>
         AI 助手
-        <span class="nav__tag">待接入</span>
-      </div>
+      </a>
     </div>
 
     <div class="sidebar__foot muted">业务日期 2026-09-01</div>

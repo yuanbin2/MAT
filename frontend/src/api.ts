@@ -1,6 +1,8 @@
 import type {
+  ChatResponse,
   DataQuality,
   DailyMetrics,
+  HealthInfo,
   MetricsSummary,
   Store,
   TopProduct,
@@ -23,6 +25,25 @@ async function request<T>(path: string, params?: Record<string, string | number>
     try {
       const body = await resp.json()
       if (body && body.error) detail = body.error
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail)
+  }
+  return (await resp.json()) as T
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const resp = await fetch(BASE + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`
+    try {
+      const data = await resp.json()
+      if (data && data.error) detail = data.error
     } catch {
       /* ignore */
     }
@@ -62,4 +83,12 @@ export function fetchTopProducts(params: {
 
 export function fetchDataQuality(): Promise<DataQuality> {
   return request('/api/data_quality')
+}
+
+export function fetchHealth(): Promise<HealthInfo> {
+  return request('/api/health')
+}
+
+export function fetchChat(sessionId: string, question: string): Promise<ChatResponse> {
+  return postJson('/api/chat', { session_id: sessionId, question })
 }
