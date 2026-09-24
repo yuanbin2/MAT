@@ -53,8 +53,12 @@ npm run dev               # 前端：http://localhost:5173，/api 自动代理�
 
 ```bash
 cd starter
-make test                 # 后端测试：清洗口径、日期边界、清洗规则、分词/切块/安全等
+make test                 # 后端测试（108 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
+                          # 只读 SQL 闸门、证据体积上限、live 取证、trace 脱敏、loader doc_id 等
 ```
+
+> `run_sql` 只接受单条只读查询（`SELECT`/`WITH … FROM`）；DataTools 的连接本身也是只读的
+> （URI `mode=ro` + `PRAGMA query_only`）。写入与 `ATTACH` 一律拒绝，见 `DEBUG_LOG.md` D12。
 
 ## 跑公开评测
 
@@ -76,9 +80,11 @@ python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/publi
 │ Vue3+TS    │                          │  server.py  参数校验/路由  │
 │ Vite+ECharts│ ◀─────────────────────── │  service.py 组装/编排      │
 └────────────┘       JSON               │  tools.py   指标查询       │
+                                        │  sqlguard.py 只读 SQL 闸门 │
                                         │  cleaning.py 清洗（KB-001）│
+                                        │  retriever/live 检索与问答 │
                                         └───────────┬──────────────┘
-                                                    │ 只读
+                                                    │ 只读（mode=ro）
                               ┌─────────────────────┴─────────────────┐
                               │ var/clean.db（清洗后）   .cache/index.json│
                               ▲                                       ▲
@@ -87,6 +93,8 @@ python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/publi
 ```
 
 - 前端不直接读 CSV/SQLite，所有数字都来自接口的真实查询。
+- 数据库连接只读（`mode=ro` + `query_only`）；模型可调用的 `run_sql` 再过一层只读语法闸门，
+  写入与 `ATTACH` 均被拒绝。
 - 换数据或知识库后执行 `make rebuild`，页面展示的就是新结果；代码里没有写死任何数字。
 
 ![经营总览](docs/screenshots/dashboard.png)

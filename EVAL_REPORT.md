@@ -83,10 +83,28 @@
 | safety | 9 | 9 |
 | health | 1 | 1 |
 
+### 4. 第三关前置加固后复测
+
+在第二关最终版基础上加固了只读边界、证据体积、live 取证闸门、trace 可观察性（详见 `DEBUG_LOG.md` 分层 4 的 D12–D16），复测确认**没有回归**：
+
+- **运行命令**：
+  ```bash
+  python eval/run_eval.py --base-url http://localhost:8001 \
+      --questions eval/public_questions.jsonl --out eval/reports/stage3_prep
+  ```
+- **关键配置**：无 Key（mock）；`valid_sales_rows=18290`、`kb_docs=35`、`kb_chunks=180`、缓存键 `b0da151dbd8b`（与加固前一致——改动不影响真实知识库索引）。
+- **总分**：**100.00 / 100**（分类得分与第 3 项完全相同）
+- **同轮验证**：后端 `pytest` **108 passed**（新增只读闸门 / 证据上限 / live 取证 / trace / loader 共 5 个测试文件）；
+  前端 `npm ci`（added 54 packages）+ `npm run build`（✓ built in 7.73s）通过。
+
 ## 仍未通过的题目
 
 无。公开题库 55 题全部通过。
 
 ## 关于 live 模式
 
-未配置真实 LLM Key，因此未提供 live 分数；以上分数即无 Key 降级模式的完整结果。模型可切换性与 `eval/llm_gateway.py preflight` 自检留待第三关接入时完成（见 `LLM_SETUP.md`）。
+未配置真实 LLM Key，因此未提供 live 分数；以上分数即无 Key 降级模式的完整结果。
+
+第三关前置加固已把 live 的**取证闸门**（数字/引用只认本轮证据、检索内容去指令化、证据 ≤ 4096 字节）
+与**可观察性**（完整模型请求与原始响应入 trace、Key 脱敏）做成 13 个打桩单元测试，
+接入真 Key 后可直接复跑；`eval/llm_gateway.py preflight` 自检留待第三关接入时完成（见 `LLM_SETUP.md`）。
