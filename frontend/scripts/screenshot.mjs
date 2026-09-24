@@ -1,22 +1,18 @@
-// 用系统 Edge（Chromium）给看板截图，供 DEMO/README 使用。
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import puppeteer from 'puppeteer-core'
+// 给看板截图（可视化辅助，非功能测试）。
+// 用法：node scripts/screenshot.mjs [url] [out]
+// 浏览器用 BROWSER_PATH 指定，否则按平台自动探测；输出路径默认写到仓库 docs/screenshots。
+import { fileURLToPath } from 'node:url'
+import { dirname, join, resolve } from 'node:path'
+import { launch } from './browser.mjs'
 
-const EDGE =
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-const url = process.argv[2] || 'http://localhost:5173/'
-const out = process.argv[3] || 'E:\\Desktop\\MyProject\\MAT\\moneki-ai-takehome\\docs\\screenshots\\dashboard.png'
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const url = process.argv[2] || process.env.APP_URL || 'http://localhost:5173/'
+const out =
+  process.argv[3] ||
+  process.env.SCREENSHOT_OUT ||
+  join(PROJECT_ROOT, 'docs', 'screenshots', 'dashboard.png')
 
-const browser = await puppeteer.launch({
-  executablePath: EDGE,
-  headless: 'new',
-  // 独立临时 profile：Edge 已有实例在跑时，复用默认 profile 会直接退出。
-  userDataDir: mkdtempSync(join(tmpdir(), 'edge-shot-')),
-  args: ['--no-proxy-server', '--disable-gpu', '--hide-scrollbars'],
-})
-
+const browser = await launch(true)
 const page = await browser.newPage()
 await page.setViewport({ width: 1440, height: 960, deviceScaleFactor: 2 })
 
@@ -27,7 +23,6 @@ page.on('console', (m) => {
 })
 
 await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 })
-// 等一帧，确保图表动画与数据渲染完成。
 await new Promise((r) => setTimeout(r, 1500))
 
 await page.screenshot({ path: out, fullPage: false })
@@ -37,4 +32,5 @@ console.log('screenshot saved:', out)
 if (errors.length) {
   console.log('page errors:')
   errors.forEach((e) => console.log('  ' + e))
+  process.exitCode = 1
 }
