@@ -154,24 +154,30 @@ class Service:
                 return Answer(answer="没有收到问题内容，请再说一次。", answer_type="clarify")
             history = self.sessions.history(session_id)
             started = time.perf_counter()
-            plan = self.planner.plan(question)
+            # 把本会话的历史传给规划器，追问（“那 7 月呢”）才能补全。
+            plan = self.planner.plan(question, history)
             trace.step("plan", plan.as_trace(), started=started)
             answer = self._run_engine(plan, trace, history)
-            self.sessions.append(
-                session_id,
-                {
-                    "question": question,
-                    "standalone": plan.standalone,
-                    "slots": plan.slots,
-                    "answer": answer.answer,
-                    "answer_type": answer.answer_type,
-                },
-            )
+            # 只有这一轮真的给出了可用结果，才把它写进会话上下文；
+            # 反问、拒答不留下可供追问继承的槽位。
+            if answer.answer_type not in ("clarify", "refusal"):
+                self.sessions.append(
+                    session_id,
+                    {
+                        "question": question,
+                        "standalone": plan.standalone,
+                        "slots": plan.slots,
+                        "answer": answer.answer,
+                        "answer_type": answer.answer_type,
+                    },
+                )
             return answer
-        except Exception:  # noqa: BLE001 - 不管里面出什么事，接口都得给个像样的回答
+        except Exception as exc:  # noqa: BLE001 - 不管里面出什么事，接口都得给个像样的回答
+            trace.error("answer", exc)
             return Answer(
                 answer="抱歉，我暂时无法回答。",
                 answer_type="refusal",
+                notes=["内部错误：%s" % exc],
             )
 
     def _run_engine(self, plan, trace: Trace, history: list[dict]) -> Answer:

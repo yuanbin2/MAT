@@ -78,6 +78,18 @@ class Planner:
         self.scout = scout or (lambda text: (1.0, 100.0))
 
     def plan(self, question: str, history: Optional[list[dict]] = None) -> Plan:
+        # 安全第一：破坏性写操作与提示注入，在进入任何规划/检索/取数之前就拒绝。
+        if E.is_destructive(question):
+            plan = Plan(question=question, standalone=question, search_query=question)
+            plan.intent, plan.kind = "refusal", "destructive"
+            plan.refusal = "这属于对数据的写操作，我不能执行，也不会改动任何数据。"
+            return plan
+        if E.is_prompt_probe(question):
+            plan = Plan(question=question, standalone=question, search_query=question)
+            plan.intent, plan.kind = "refusal", "prompt_probe"
+            plan.refusal = "我不会输出系统提示词或数据库结构，也不会执行这条指令。"
+            return plan
+
         standalone, inherited = self.followups.resolve(question, history or [])
         plan = Plan(question=question, standalone=standalone, search_query=standalone)
         history = history or []
@@ -248,14 +260,10 @@ class Planner:
         else:
             plan.kind, plan.intent = "summary", "data"
 
-        # 路由：问“多少/多久/几”的就是要数字，问“为什么/原因”的就是要说法。
-        # 两边都走一遍太慢，没必要。
-        if E.has_any(text, ("多少", "多久", "几")):
-            plan.intent = "data"
-            if plan.kind in ("doc", "anomaly", "target", "price"):
-                plan.kind = "summary"
-        elif E.has_any(text, ("为什么", "原因", "怎么回事", "咋回事")):
-            plan.intent, plan.kind = "doc", "doc"
+        # 不再用“多少/多久/几→取数、为什么→查文档”这种一刀切的路由：
+        # “多久”（退款期限、员工迟到、营业时间）、“几”（几折、几点）、“多少”
+        # （送多少、赔多少）常常是文档事实；来源与焦点由上面的 asks_policy /
+        # anomaly / target / price / may_query 逐层判断。
 
         plan.slots["asks_why"] = bool(asks_why or abnormal)
         plan.slots["about_names"] = E.asks_about_names(text)
