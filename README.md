@@ -53,8 +53,20 @@ npm run dev               # 前端：http://localhost:5173，/api 自动代理�
 
 ```bash
 cd starter
-make test                 # 25 个测试：KB-001 口径、日期边界、清洗台账对账
+make test                 # 后端测试：清洗口径、日期边界、清洗规则、分词/切块/安全等
 ```
+
+## 跑公开评测
+
+```bash
+# 服务起在 8000（默认）后，在仓库根目录执行（只依赖 Python 标准库）：
+python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/public_questions.jsonl
+
+# 只跑某一类，调试更快：
+python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/public_questions.jsonl --only retrieval
+```
+
+公开题库（无 Key 的 mock 降级模式）实测满分 100/100，分数与运行命令见 `EVAL_REPORT.md`；逐缺陷根因见 `DEBUG_LOG.md`。
 
 ## 架构
 
