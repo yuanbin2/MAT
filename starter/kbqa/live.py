@@ -105,8 +105,19 @@ class LiveEngine:
                     )
                     continue
                 started = time.perf_counter()
-                result = self.run_tool(name, params)
-                trace.step("tool", {"tool": name, "params": params}, started=started)
+                if name == "search_kb":
+                    # 检索必须继承本轮 Plan 的 as_of / historical / store_id / year /
+                    # window / numeric 约束，复用 /api/retrieve 背后的同一套 retriever；
+                    # 历史版本与生效日期由规划器决定，不靠模型猜。
+                    result = self._search_kb(params, plan, trace, started)
+                else:
+                    result = self.run_tool(name, params)
+                    trace.step("tool", {"tool": name, "params": params}, started=started)
+                    scope_error = self._scope_error(plan, name, params)
+                    if scope_error:
+                        # 模型查了错误的时间/门店/商品：结果再真实也不能当证据。
+                        trace.step("tool_scope_mismatch", {"tool": name, "reason": scope_error})
+                        result = {"error": scope_error}
                 if name == "search_kb":
                     # 去指令化后才进模型上下文与归档：知识库里的指令句只是资料。
                     result = self._clean_kb_result(result, trace)
@@ -133,6 +144,75 @@ class LiveEngine:
                         "模型连续 %d 轮给出无法解析的工具参数" % bad_args,
                     )
         raise LLMError("tool_loop", "工具调用超过 %d 轮仍未给出回答" % MAX_TOOL_ROUNDS)
+
+    # -- 工具执行（带 Plan 约束） -------------------------------------------------
+
+    def _search_kb(self, params: dict, plan: Plan, trace, started: float) -> dict:
+        """``search_kb`` 复用 /api/retrieve 背后的同一套 retriever，并注入本轮 Plan 的检索约束。
+
+        历史版本（``historical``）与生效日期（``as_of``）由规划器从问题里判出来，
+        这里原样透传——不依赖模型自己猜日期，也不把 Plan 放进任何全局可写变量。
+        """
+        query = str(params.get("query") or "").strip()
+        top_k = int(params.get("top_k") or 5)
+        slots = getattr(plan, "slots", {}) or {}
+        result = self.answerer.retriever.search(
+            query,
+            top_k=top_k,
+            as_of=getattr(plan, "as_of", None),
+            historical=bool(slots.get("historical")),
+            store_id=getattr(plan, "store_id", None),
+            year=getattr(plan, "year", None),
+            window=getattr(plan, "window", None),
+            numeric=bool(slots.get("metric_explicit")) and bool(getattr(plan, "needs_data", False)),
+        )
+        trace.step("search", result.as_trace(), started=started)
+        return {"results": [hit.as_result() for hit in result.hits]}
+
+    def _scope_error(self, plan: Plan, name: str, params: dict) -> Optional[str]:
+        """校验数据库工具参数与 Plan 的时间/门店/商品是否一致。
+
+        模型查了错误的月份或门店，即使 SQL 返回真实数字，也不能作为当前问题的证据。
+        比较/排行/目标/异常解释确有必要的多次查询，其窗口要么落在 ``window``、
+        要么落在 ``compare_window``，都放行。
+        """
+        store = str(params.get("store_id") or "").strip().upper()
+        product = str(params.get("product_id") or "").strip().upper()
+        plan_store = getattr(plan, "store_id", None)
+        plan_product = getattr(plan, "product_id", None)
+        if plan_store and store and store != plan_store:
+            return "门店 %s 与当前问题里的 %s 不一致，查错门店的结果不能作为证据" % (
+                store,
+                plan_store,
+            )
+        if plan_product and product and product != plan_product:
+            return "商品 %s 与当前问题里的 %s 不一致，查错商品的结果不能作为证据" % (
+                product,
+                plan_product,
+            )
+        window = getattr(plan, "window", None)
+        compare_window = getattr(plan, "compare_window", None)
+        allowed_windows = {w for w in (window, compare_window) if w}
+        if not allowed_windows:
+            return None
+        if name == "compare_periods":
+            pairs = [
+                (str(params.get("start_a") or ""), str(params.get("end_a") or "")),
+                (str(params.get("start_b") or ""), str(params.get("end_b") or "")),
+            ]
+            for pair in pairs:
+                if pair[0] and pair[1] and pair not in allowed_windows:
+                    return "比较区间 %s~%s 与当前问题的时间范围不一致" % pair
+            return None
+        start = str(params.get("start") or "")
+        end = str(params.get("end") or "")
+        if start and end and (start, end) not in allowed_windows:
+            return "查询区间 %s~%s 与当前问题的时间范围 %s 不一致" % (
+                start,
+                end,
+                "、".join("%s~%s" % w for w in sorted(allowed_windows)),
+            )
+        return None
 
     # -- 组装 -------------------------------------------------------------------
 

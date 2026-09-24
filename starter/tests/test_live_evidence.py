@@ -375,3 +375,27 @@ def test_whitelist_reads_retrieved_chunks_only():
     trace = Trace("n6", plan.question)
     answer = engine._finalise(plan, "满500送60 [KB-100]。", [], retrieved, trace)
     assert answer.answer == "（兜底：按工具结果模板回答）"
+
+
+def test_doc_target_value_allowed_but_fabricated_actual_rejected():
+    """混合题：政策目标值来自文档（可引用），经营实绩必须来自数据库。"""
+    facts = FakeFacts({"KB-023": "618 活动目标销量为 120 份。"})
+    engine = make_engine(facts)
+    plan = _plan("618 目标与实绩")
+    retrieved = {"KB-023": [{"doc_id": "KB-023", "text": "618 活动目标销量为 120 份。"}]}
+    evidence = [{"tool": "query_metrics", "params": {}, "result": {"qty": 118.0}}]
+
+    answer = engine._finalise(
+        plan, "目标 120 份，实际售出 118 份 [KB-023]。", evidence, retrieved, Trace("n7", plan.question)
+    )
+    # 目标值（120，来自文档片段）与实绩（118，来自数据库）都合法 → 混合回答
+    assert answer.answer_type == "hybrid"
+    assert answer.answer.startswith("目标 120 份")
+
+    # 实绩写一个数据库里没有的数字（999）→ 即使目标值合法，也要拦截
+    trace = Trace("n8", plan.question)
+    bad = engine._finalise(
+        plan, "目标 120 份，实际售出 999 份 [KB-023]。", evidence, retrieved, trace
+    )
+    assert bad.answer == "（兜底：按工具结果模板回答）"
+    assert any(step["step"] == "number_check_failed" for step in trace.steps)
