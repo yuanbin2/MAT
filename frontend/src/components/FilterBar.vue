@@ -7,6 +7,8 @@ const props = defineProps<{
   start: string
   end: string
   storeId: string
+  dataPeriod: { start: string | null; end: string | null }
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -17,9 +19,16 @@ const emit = defineEmits<{
   (e: 'reset'): void
 }>()
 
+const missingDate = computed(() => !props.start || !props.end)
 const invalidRange = computed(() => {
   if (!props.start || !props.end) return false
   return props.start > props.end
+})
+
+const hint = computed(() => {
+  if (missingDate.value) return '请选择开始与结束日期'
+  if (invalidRange.value) return '结束日期不能早于开始日期'
+  return ''
 })
 </script>
 
@@ -32,6 +41,8 @@ const invalidRange = computed(() => {
         class="filter__input"
         type="date"
         :value="start"
+        :min="dataPeriod.start ?? undefined"
+        :max="dataPeriod.end ?? undefined"
         @input="emit('update:start', ($event.target as HTMLInputElement).value)"
       />
     </div>
@@ -45,6 +56,8 @@ const invalidRange = computed(() => {
         class="filter__input"
         type="date"
         :value="end"
+        :min="dataPeriod.start ?? undefined"
+        :max="dataPeriod.end ?? undefined"
         @input="emit('update:end', ($event.target as HTMLInputElement).value)"
       />
     </div>
@@ -65,13 +78,17 @@ const invalidRange = computed(() => {
     </div>
 
     <div class="filter__actions">
-      <button class="btn btn--primary" :disabled="invalidRange" @click="emit('query')">查询</button>
-      <button class="btn btn--ghost" @click="emit('reset')">重置</button>
+      <button
+        class="btn btn--primary"
+        :disabled="missingDate || invalidRange || disabled"
+        @click="emit('query')"
+      >
+        查询
+      </button>
+      <button class="btn btn--ghost" :disabled="disabled" @click="emit('reset')">重置</button>
     </div>
 
-    <div v-if="invalidRange" class="filter__hint" role="alert">
-      结束日期不能早于开始日期
-    </div>
+    <div v-if="hint" class="filter__hint" role="alert">{{ hint }}</div>
   </div>
 </template>
 
@@ -93,6 +110,7 @@ const invalidRange = computed(() => {
 
 .filter__field--store {
   min-width: 200px;
+  flex: 1;
 }
 
 .filter__label {
@@ -109,6 +127,7 @@ const invalidRange = computed(() => {
   color: var(--c-text);
   font-size: 13px;
   outline: none;
+  min-width: 140px;
 }
 
 .filter__input:focus {
@@ -136,6 +155,7 @@ const invalidRange = computed(() => {
   font-size: 13px;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
 }
 
 .btn--primary {
@@ -158,9 +178,14 @@ const invalidRange = computed(() => {
   border-color: var(--c-border);
 }
 
-.btn--ghost:hover {
+.btn--ghost:hover:not(:disabled) {
   border-color: var(--c-primary);
   color: var(--c-primary);
+}
+
+.btn--ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .filter__hint {

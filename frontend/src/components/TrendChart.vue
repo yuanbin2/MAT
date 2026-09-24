@@ -2,12 +2,12 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent } from 'echarts/components'
+import { DataZoomComponent, GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import type { DailyPoint } from '../types'
 import { formatMoney, formatOrders, shortDate } from '../format'
 
-echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
+echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer])
 
 const props = defineProps<{
   days: DailyPoint[]
@@ -35,7 +35,7 @@ function render() {
   const interval = props.days.length > 60 ? Math.ceil(props.days.length / 30) - 1 : 'auto'
 
   chart.setOption({
-    grid: { left: 64, right: 24, top: 30, bottom: 36 },
+    grid: { left: 64, right: 24, top: 30, bottom: props.days.length > 60 ? 56 : 36 },
     tooltip: {
       trigger: 'axis',
       backgroundColor: '#fff',
@@ -88,6 +88,20 @@ function render() {
         itemStyle: { color: '#174b46' },
         areaStyle: { color: 'rgba(23, 75, 70, 0.06)' },
         emphasis: { focus: 'series' },
+      },
+    ],
+    // 长跨度区间可拖拽/滚轮缩放；短区间自然无感。
+    dataZoom: [
+      { type: 'inside', filterMode: 'none', zoomOnMouseWheel: true, moveOnMouseMove: true },
+      {
+        type: 'slider',
+        filterMode: 'none',
+        height: 20,
+        bottom: 8,
+        borderColor: '#e2e8e3',
+        show: props.days.length > 60,
+        handleStyle: { color: '#174b46' },
+        dataBackground: { lineStyle: { color: '#174b46' }, areaStyle: { color: '#e5f0ee' } },
       },
     ],
   })
