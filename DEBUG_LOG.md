@@ -328,6 +328,47 @@
 
 ---
 
+## 分层 6：第三关边界加固（预防性）
+
+> 这一层的各项是**为第三关主动补的边界**，不是线上事故驱动的缺陷修复；
+> 每项都有新测试，红测证据只对实际跑过 worktree 复现的项声称，其余如实标注。
+
+### D21 `run_sql` 没有业务表白名单，任意表都能读
+
+- **现象（预防性）**：词法闸门只拦写操作与 `sqlite_*`/`pragma_*`，`SELECT * FROM secrets`
+  这类**业务表之外**的表照样放行——第三关把 `run_sql` 暴露给模型后，这是不必要的暴露面。
+- **红测证据**（检出 `f37cda1` worktree）：`check_readonly_sql("SELECT * FROM secrets")` → `[]`；
+  `check_readonly_sql('SELECT * FROM "other_db"')` → `[]`。
+- **修复**：新增 `BUSINESS_TABLES = {sales_clean, stores, products}`；`referenced_tables()` 从
+  `FROM`/`JOIN` 后取表名（先剥字符串字面量与注释、再去引号），`cte_names()` 认 `WITH` 里的 CTE；
+  访问白名单之外的表一律拒绝，业务查询与 CTE 不受影响。
+- **回归测试**：`test_unknown_table_rejected`、`test_cte_over_business_tables_allowed`、
+  `test_business_queries_still_allowed`；接口级 `test_run_tool_rejects_internal_objects_over_api`。
+
+### D22 数据库文件路径 / 扩展加载没有专门拦截（belt-and-suspenders）
+
+- **说明**：`SELECT load_extension('/tmp/x.so')` 这类**没有 FROM** 的语句本来就会被
+  “没有 FROM”规则拒绝；`ATTACH DATABASE 'file:...'` 也已被 `ATTACH` 关键字拒绝。
+  新增的 `file_path_objects()` 是在这两层之上的第三道保险：即使未来有人放宽 FROM 检查
+  或写出形如 `SELECT * FROM sales_clean WHERE path = 'file:...'` 的查询，
+  `file:` 路径、`load_extension`、`readfile`/`writefile`/`edit` 也会被显式拒绝。
+  此项**没有单独的 worktree 红测**（旧行为是被前两层部分覆盖的），如实标注为加固而非缺陷修复。
+- **回归测试**：`test_file_path_and_extension_rejected`。
+
+### D23 `search_kb` 未继承 Plan 检索约束；数据库工具参数未与 Plan 校验（第三关新要求）
+
+- **背景**：第三关要求“模型调用 search_kb 时必须继承本轮 Plan 的 as_of/historical/store_id/year/window，
+  复用 /api/retrieve 背后的同一套 retriever”，并且“模型查了错误月份或错误门店的结果不能当证据”。
+  这是新能力，不是修复某个已发生的缺陷。
+- **实现**：`live._search_kb()` 用 `answerer.retriever`（即 `/api/retrieve` 同一套）并注入 Plan 约束；
+  `live._scope_error()` 在工具执行后校验区间/门店/商品，不符则结果不进证据并记 `tool_scope_mismatch`。
+  Plan 以参数传递，不进任何可被并发覆盖的全局变量。
+- **回归测试**：`tests/test_live_orchestration.py`（约束继承、as_of 由 Plan 决定、门店/窗口/比较窗口
+  一致性、端到端“查错区间的结果不进证据”）；`tests/test_live_evidence.py::test_doc_target_value_allowed_but_fabricated_actual_rejected`
+  覆盖“政策目标值来自文档、经营实绩来自数据库”的区分。
+
+---
+
 ## 尚未解决 / 已知边界
 
 - 无 LLM Key 的 mock 降级模式已满分；live 模式（配置真实模型后）未在本机对真实 API 跑过，

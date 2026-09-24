@@ -1,12 +1,13 @@
 # Moneki.ai 经营分析系统
 
-连锁餐饮品牌 Moneki.ai 的内部经营分析系统：经营看板 + （后续关卡的）AI 混合问答助手。
-当前完成**第一关**：日期/门店筛选、营业额趋势、Top 10 商品、数据质量，以及契约规定的
-`/api/metrics/summary` 与 `/api/metrics/daily`。
+连锁餐饮品牌 Moneki.ai 的内部经营分析系统：经营看板 + AI 混合问答助手。
+已完成三关：**经营看板**（筛选/趋势/Top10/数据质量）、**RAG 修复**（检索/版本/引用）、
+**混合问答**（数据 + 文档双证据，mock 降级与 live 模型编排）。
 
 - 业务口径以知识库 **KB-001《指标口径手册 v3》** 为准（现行版，2026-05-01 起生效）。
 - 系统的"今天"固定为 **2026-09-01**，与真实电脑日期无关。
 - 作业原文（任务说明）保留在 `docs/ASSIGNMENT.md`，接口契约见 `docs/API_CONTRACT.md`。
+- 模型接入说明见 **`LLM_SETUP.md`**，混合问答的真实演示流程见 **`DEMO.md`**。
 
 ## 快速开始（3 步）
 
@@ -39,7 +40,7 @@ npm install
 npm run dev               # 前端：http://localhost:5173，/api 自动代理到 8000
 ```
 
-浏览器打开 **http://localhost:5173** 即可看到经营总览。
+浏览器打开 **http://localhost:5173** 即可看到经营总览；侧栏「**AI 助手**」进入混合问答工作区。
 
 > Windows 下如果没装 make，等价命令：`python -m venv .venv` →
 > `.venv\Scripts\pip install -r requirements.txt` →
@@ -53,14 +54,15 @@ npm run dev               # 前端：http://localhost:5173，/api 自动代理�
 
 ```bash
 cd starter
-make test                 # 后端测试（140 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
-                          # 只读 SQL 闸门、SQLite 内部对象、有界读取、证据体积、live 数字取证、
-                          # trace 脱敏、loader doc_id 等
+make test                 # 后端测试（151 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
+                          # 只读 SQL 闸门、SQLite 内部对象、业务表白名单、有界读取、证据体积、
+                          # live 数字取证、search_kb 继承 Plan、trace 脱敏、loader doc_id 等
 ```
 
-> `run_sql` 只接受单条只读查询（`SELECT`/`WITH … FROM`），并拒绝访问 `sqlite_master`/`sqlite_schema`/
-> `pragma_*` 等内部对象；DataTools 的连接本身也是只读的（URI `mode=ro` + `PRAGMA query_only`）。
-> 写入与 `ATTACH` 一律拒绝，见 `DEBUG_LOG.md` D12、D19。
+> `run_sql` 只接受单条只读查询（`SELECT`/`WITH … FROM`），拒绝 `sqlite_master`/`sqlite_schema`/
+> `pragma_*` 等内部对象、`file:` 路径与扩展加载，且只能访问业务表 `sales_clean`/`stores`/`products`；
+> DataTools 的连接本身也是只读的（URI `mode=ro` + `PRAGMA query_only`）。
+> 见 `DEBUG_LOG.md` D12、D19 与分层 5/6。
 
 ## 跑公开评测
 
@@ -74,6 +76,13 @@ python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/publi
 
 公开题库（无 Key 的 mock 降级模式）实测满分 100/100，分数与运行命令见 `EVAL_REPORT.md`；逐缺陷根因见 `DEBUG_LOG.md`。
 
+## 模型接入（live / mock）
+
+- **mock**：不配 `LLM_API_KEY` 时，`/api/chat` 走本地规划 + 检索 + 工具取数 + 模板渲染，公开题库满分，前端显示「本地演示 · 降级模式」。
+- **live**：配好 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` 后，`/api/chat` 走模型编排（模型出候选 → 代码核验数字/引用/范围 → 可信才返回），前端显示「已接入大模型 · 在线」。
+- 切换只改环境变量、不改代码；接入预检（16 场景 P1–P14）13 项通过、1 项未检查，详见 **`LLM_SETUP.md` 第 7 节**。
+- 混合问答的真实演示（提问 → 查询 → 文档引用 → 界面证据）见 **`DEMO.md`**。
+
 ## 架构
 
 ```
@@ -81,10 +90,13 @@ python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/publi
 │  前端看板   │ ───────────────────────▶ │  FastAPI（starter/kbqa）  │
 │ Vue3+TS    │                          │  server.py  参数校验/路由  │
 │ Vite+ECharts│ ◀─────────────────────── │  service.py 组装/编排      │
-└────────────┘       JSON               │  tools.py   指标查询       │
+│  + AI 助手  │       JSON               │  planner.py 规划/追问     │
+└────────────┘                          │  answerer/hybrid 取证作答 │
+                                        │  live.py   模型编排/核验  │
+                                        │  tools.py   指标查询       │
                                         │  sqlguard.py 只读 SQL 闸门 │
                                         │  cleaning.py 清洗（KB-001）│
-                                        │  retriever/live 检索与问答 │
+                                        │  retriever.py 检索/版本   │
                                         └───────────┬──────────────┘
                                                     │ 只读（mode=ro）
                               ┌─────────────────────┴─────────────────┐
@@ -94,10 +106,12 @@ python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/publi
                      （原始 POS 导出）                        （35 篇文档）
 ```
 
-- 前端不直接读 CSV/SQLite，所有数字都来自接口的真实查询。
-- 数据库连接只读（`mode=ro` + `query_only`）；模型可调用的 `run_sql` 再过一层只读语法闸门，
-  写入与 `ATTACH` 均被拒绝。
-- 换数据或知识库后执行 `make rebuild`，页面展示的就是新结果；代码里没有写死任何数字。
+- 前端不直接读 CSV/SQLite，所有数字都来自接口的真实查询；不用 v-html 渲染模型文本。
+- 数据库连接只读（`mode=ro` + `query_only`）；模型可调用的 `run_sql` 再过一层只读语法闸门
+  （单条 SELECT、业务表白名单、内部对象与文件路径拦截），写入与 `ATTACH` 均被拒绝。
+- live 模式下模型只是「出候选」：回答里的经营数字必须对应真实工具调用、文档事实必须对应
+  本轮检索到的片段原文，核验不过就用本地 Answerer 兜底并在 trace 标明原因。
+- 换数据或知识库后执行 `make rebuild`，页面与问答展示的就是新结果；代码里没有写死任何数字。
 
 ![经营总览](docs/screenshots/dashboard.png)
 
@@ -129,4 +143,7 @@ python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/publi
 
 - 数据质量区展示的是**本次重建的全量清洗统计**，不随日期/门店筛选变化（页面上有注明）。
 - 筛选区间开始日期晚于结束日期时，前端禁用查询按钮并提示；接口本身对这类区间返回空数据。
-- AI 问答（第二/三关）尚未实现，侧栏"AI 助手"为预留入口。
+- 真实 live（对 DeepSeek 真实接口跑公开评测）**未验证**——本机没有 Key；
+  模型接线已用预检（fake 模型）与单元桩件验证到 P1–P13 全过，见 `LLM_SETUP.md`。
+- live 模式的回答核验失败时会回退到本地 Answerer 的模板回答（trace 里标明原因），
+  因此 live 的回答质量受检索质量影响；检索为纯 BM25 + 别名扩写，无向量检索。
