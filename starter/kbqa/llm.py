@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -16,11 +17,13 @@ import httpx
 
 #: 契约 §7.3：思考也占输出额度，`max_tokens` 不设或不小于 2048。
 MAX_TOKENS = 4096
-#: D11：正常结束只有这两种。
+#: 正常结束只有这两种。
 GOOD_FINISH = ("stop", "tool_calls")
 #: 这几类是暂时性的，值得重试一次。
 RETRYABLE_STATUS = (429, 500, 503)
 RETRYABLE_KINDS = ("empty_content", "insufficient_system_resource", "transport")
+#: trace 里请求/响应的安全兜底长度；正常一轮远小于它，不会触发截断。
+MAX_TRACE_TEXT = 200_000
 
 
 @dataclass
@@ -69,6 +72,27 @@ class LLMClient:
             body["tool_choice"] = "auto"
         return body
 
+    def _mask(self, text: str) -> str:
+        """写进 trace 前把密钥擦掉（双保险——Key 本来就不放进 body）。
+
+        只擦认证信息，不改动提示词与模型输出，保证可观察性。
+        """
+        text = text or ""
+        if self.api_key:
+            text = text.replace(self.api_key, "***")
+        text = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "Bearer ***", text)
+        text = re.sub(r"sk-[A-Za-z0-9_\-]{6,}", "sk-***", text)
+        return text
+
+    def _clip(self, text: str) -> str:
+        if len(text) <= MAX_TRACE_TEXT:
+            return text
+        return text[:MAX_TRACE_TEXT] + "…（trace 已截断，共 %d 字）" % len(text)
+
+    def _record_request(self, body: dict) -> str:
+        """完整记录请求体（含每一轮消息与工具定义），仅脱敏、不预览截断。"""
+        return self._clip(self._mask(json.dumps(body, ensure_ascii=False)))
+
     def chat(
         self,
         messages: list[dict],
@@ -83,7 +107,9 @@ class LLMClient:
             "model": self.model,
             "messages": len(messages),
             "tools": len(tools or []),
-            # 契约 §6：trace 里要看得到发给模型的最终提示词。
+            # 契约 §6/§7.2：trace 里要看得到发给模型的**完整**请求（提示词、
+            # 工具定义、每一轮消息），只对 Key 脱敏，不做内容截断。
+            "request": self._record_request(body),
             "prompt": _preview(json.dumps(messages, ensure_ascii=False)),
         }
         try:
@@ -97,27 +123,30 @@ class LLMClient:
                 timeout=httpx.Timeout(timeout or self.timeout, connect=15.0),
             )
         except httpx.TimeoutException as exc:
-            record.update(error="timeout", detail=str(exc))
+            record.update(error="timeout", detail=self._mask(str(exc)))
             self._note(on_call, record, started)
             raise LLMError("timeout", "等待模型响应超时：%s" % exc) from exc
         except httpx.HTTPError as exc:
-            record.update(error="transport", detail=str(exc))
+            record.update(error="transport", detail=self._mask(str(exc)))
             self._note(on_call, record, started)
             raise LLMError("transport", "调用模型失败：%s" % exc) from exc
 
         record["status"] = response.status_code
+        # 契约 §6：模型**原始响应**也要留痕（脱敏后完整保存）。
+        record["response"] = self._clip(self._mask(response.text))
+        record["response_bytes"] = len(response.text.encode("utf-8"))
         if response.status_code != 200:
-            # D13：400/401/402/422/429/500/503 都在这里变成结构化错误。
-            detail = _error_detail(response)
+            # 400/401/402/422/429/500/503 都在这里变成结构化错误。
+            detail = self._mask(_error_detail(response))
             record.update(error="http_%d" % response.status_code, detail=detail)
             self._note(on_call, record, started)
             raise LLMError("http_error", detail, status=response.status_code)
 
-        # D14：服务繁忙时正文前面会有空行，json 解析要能跳过。
+        # 服务繁忙时正文前面会有空行，json 解析要能跳过。
         try:
             payload = json.loads(response.text.strip() or "{}")
         except ValueError as exc:
-            record.update(error="bad_json", detail=response.text[:200])
+            record.update(error="bad_json", detail=self._mask(response.text[:200]))
             self._note(on_call, record, started)
             raise LLMError("bad_json", "模型返回的不是合法 JSON：%s" % response.text[:200]) from exc
 
