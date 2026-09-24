@@ -8,3 +8,17 @@ frontend/dist/
 frontend/tsconfig.tsbuildinfo
 frontend/node_modules/.vite/
 eval/reports/
+
+# 本地环境与密钥（绝不能入库）
+.env
+.env.*
+!.env.example
+LLM_SETUP.local.md
+
+# 模型流量代理日志与预检临时输出（可重新生成）
+llm_traffic.jsonl
+eval/preflight_report.md
+eval/preflight_report.json
+eval/llm_traffic.jsonl
+*.db-journal
+*.sqlite-journal

@@ -148,13 +148,15 @@ def test_guard_reports_specific_problems():
 def test_row_limit_and_byte_limit(tmp_path):
     path = tmp_path / "big.db"
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE big (i INTEGER, s TEXT)")
-    conn.executemany("INSERT INTO big VALUES (?, ?)", [(i, "x" * 200) for i in range(1000)])
+    conn.execute("CREATE TABLE stores (store_id TEXT, store_name TEXT)")
+    conn.executemany(
+        "INSERT INTO stores VALUES (?, ?)", [("S%03d" % i, "x" * 200) for i in range(1000)]
+    )
     conn.commit()
     conn.close()
 
     tools = DataTools(path)
-    out = tools.run_sql("SELECT * FROM big")
+    out = tools.run_sql("SELECT * FROM stores")
     assert "error" not in out
     assert len(out["rows"]) <= MAX_SQL_ROWS
     assert out["truncated"] is True
@@ -166,13 +168,13 @@ def test_column_limit(tmp_path):
     path = tmp_path / "wide.db"
     conn = sqlite3.connect(path)
     columns = ", ".join("c%d INTEGER" % i for i in range(60))
-    conn.execute("CREATE TABLE wide (%s)" % columns)
-    conn.execute("INSERT INTO wide DEFAULT VALUES")
+    conn.execute("CREATE TABLE stores (%s)" % columns)
+    conn.execute("INSERT INTO stores DEFAULT VALUES")
     conn.commit()
     conn.close()
 
     tools = DataTools(path)
-    out = tools.run_sql("SELECT * FROM wide")
+    out = tools.run_sql("SELECT * FROM stores")
     assert "error" not in out
     assert len(out["columns"]) <= 40
 
@@ -236,13 +238,13 @@ def test_run_sql_reads_bounded_rows(tmp_path):
     """有界读取：1000 行只取 201 行判断超限，返回恰好 MAX_SQL_ROWS 行。"""
     path = tmp_path / "many.db"
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE t (i INTEGER)")
-    conn.executemany("INSERT INTO t VALUES (?)", [(i,) for i in range(1000)])
+    conn.execute("CREATE TABLE sales_clean (i INTEGER)")
+    conn.executemany("INSERT INTO sales_clean VALUES (?)", [(i,) for i in range(1000)])
     conn.commit()
     conn.close()
 
     tools = DataTools(path)
-    out = tools.run_sql("SELECT i FROM t")
+    out = tools.run_sql("SELECT i FROM sales_clean")
     assert out["row_count"] == MAX_SQL_ROWS
     assert out["truncated"] is True
 
@@ -278,14 +280,43 @@ def test_oversized_run_sql_keeps_scalars_and_asks_to_narrow(tmp_path):
     path = tmp_path / "wide.db"
     conn = sqlite3.connect(path)
     columns = ", ".join("c%d TEXT" % i for i in range(60))
-    conn.execute("CREATE TABLE wide (%s)" % columns)
-    conn.execute("INSERT INTO wide DEFAULT VALUES")
+    conn.execute("CREATE TABLE stores (%s)" % columns)
+    conn.execute("INSERT INTO stores DEFAULT VALUES")
     conn.commit()
     conn.close()
 
     tools = DataTools(path)
-    out = tools.run_sql("SELECT * FROM wide")
+    out = tools.run_sql("SELECT * FROM stores")
     assert "error" not in out
     assert len(json.dumps(out, ensure_ascii=False).encode("utf-8")) <= MAX_EVIDENCE_BYTES
     if out.get("note"):
         assert "缩小查询范围" in out["note"]
+
+
+# -- 业务表白名单与文件路径 -----------------------------------------------------
+
+
+def test_unknown_table_rejected(db):
+    tools = DataTools(db)
+    out = tools.run_sql("SELECT * FROM secrets")
+    assert "error" in out
+    assert any("业务表之外" in problem for problem in out["problems"])
+
+
+def test_cte_over_business_tables_allowed(db):
+    tools = DataTools(db)
+    out = tools.run_sql(
+        "WITH s AS (SELECT store_id FROM sales_clean) SELECT COUNT(*) AS n FROM s"
+    )
+    assert "error" not in out
+
+
+def test_file_path_and_extension_rejected(db):
+    tools = DataTools(db)
+    for sql in (
+        "ATTACH DATABASE 'file:/etc/passwd.db' AS x",
+        "SELECT load_extension('/tmp/evil.so')",
+        "SELECT readfile('/etc/passwd')",
+    ):
+        out = tools.run_sql(sql)
+        assert "error" in out, sql

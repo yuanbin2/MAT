@@ -65,6 +65,16 @@ WRITE_WORDS = frozenset(
 #: ``pragma_*``（如 ``pragma_table_info``、``pragma_database_list``）。
 _INTERNAL_NAME = re.compile(r"(?<![a-z0-9_])((?:sqlite|pragma)_[a-z0-9_]*)")
 
+#: 允许 ``run_sql`` 触碰的业务表。别的表一律拒绝（含临时表、文件路径、系统表）。
+BUSINESS_TABLES = frozenset({"sales_clean", "stores", "products"})
+
+#: 数据库文件路径 / 扩展加载 / 文件读写函数：即使藏在字符串里也要拒绝。
+_FILE_PATH_PATTERNS = (
+    re.compile(r"file:\s*[A-Za-z0-9/\\_.:%-]+", re.I),
+    re.compile(r"\bload_extension\s*\(", re.I),
+    re.compile(r"\b(?:readfile|writefile|edit)\s*\(", re.I),
+)
+
 
 def sql_skeleton(sql: str) -> tuple[str, int]:
     """把注释、字符串字面量与带引号的标识符抹成空白，返回（骨架, 语句条数）。
@@ -128,6 +138,80 @@ def internal_objects(sql: Any) -> list[str]:
     return sorted({match.group(1) for match in _INTERNAL_NAME.finditer(relaxed)})
 
 
+def file_path_objects(sql: Any) -> list[str]:
+    """找出试图访问数据库文件路径 / 扩展加载 / 文件读写函数的写法。"""
+    text = sql or ""
+    hits: list[str] = []
+    for pattern in _FILE_PATH_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            hits.append(match.group(0))
+    return hits
+
+
+def _strip_literals(sql: str) -> str:
+    """去掉注释与单引号字符串字面量，保留标识符（双引号/反引号/方括号原样留着）。"""
+    out: list[str] = []
+    i, n = 0, len(sql or "")
+    while i < n:
+        ch = sql[i]
+        if ch == "-" and sql.startswith("--", i):
+            end = sql.find("\n", i)
+            i = n if end == -1 else end
+            out.append(" ")
+            continue
+        if ch == "/" and sql.startswith("/*", i):
+            end = sql.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            out.append(" ")
+            continue
+        if ch == "'":
+            j = i + 1
+            while j < n:
+                if sql[j] == "'":
+                    if j + 1 < n and sql[j + 1] == "'":
+                        j += 2
+                        continue
+                    break
+                j += 1
+            i = j + 1
+            out.append(" ")
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+_TABLE_REF = re.compile(r"\b(?:from|join)\b\s+([A-Za-z_][A-Za-z0-9_]*)", re.I)
+
+
+def referenced_tables(sql: Any) -> list[str]:
+    """从 ``FROM`` / ``JOIN`` 后面取表名（去掉引号与限定符，小写）。"""
+    if not isinstance(sql, str):
+        return []
+    text = re.sub(r"[\"'`\[\]]", "", _strip_literals(sql))
+    tables = []
+    for match in _TABLE_REF.finditer(text):
+        name = match.group(1).split(".")[-1].lower()
+        tables.append(name)
+    return tables
+
+
+def cte_names(sql: Any) -> set[str]:
+    """粗略取 ``WITH … name AS ( … )`` 里声明的 CTE 名（够用，不做完整递归解析）。"""
+    if not isinstance(sql, str):
+        return set()
+    text = re.sub(r"[\"'`\[\]]", "", _strip_literals(sql))
+    names: set[str] = set()
+    match = re.search(r"\bwith\b", text, re.I)
+    if not match:
+        return names
+    tail = text[match.end():]
+    for m in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(", tail, re.I):
+        names.add(m.group(1).lower())
+    return names
+
+
 def check_readonly_sql(sql: Any) -> list[str]:
     """返回问题列表；空列表代表这条 SQL 是安全、只读、且真的查了表。"""
     if not isinstance(sql, str) or not sql.strip():
@@ -149,6 +233,16 @@ def check_readonly_sql(sql: Any) -> list[str]:
     internal = internal_objects(sql)
     if internal:
         problems.append("访问了 SQLite 内部对象：%s（只允许业务表）" % "、".join(internal))
+    paths = file_path_objects(sql)
+    if paths:
+        problems.append("访问了数据库文件路径或文件读写函数：%s" % "、".join(paths))
+    allowed = BUSINESS_TABLES | cte_names(sql)
+    unknown = sorted({table for table in referenced_tables(sql) if table not in allowed})
+    if unknown:
+        problems.append(
+            "访问了业务表之外的表：%s（只允许 %s）"
+            % ("、".join(unknown), "、".join(sorted(BUSINESS_TABLES)))
+        )
     return problems
 
 
