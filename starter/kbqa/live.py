@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import string
 import time
 from typing import Any, Callable, Optional
 
@@ -12,14 +13,15 @@ from .schemas import Answer
 from .llm import LLMClient, LLMError
 from .planner import Plan
 from .sanitize import sanitize, split_sentences
-from .sqlguard import fit_evidence
+from .sqlguard import EVIDENCE_META_KEYS, fit_evidence
 from .tokenizer import tokenize
 from .toolspec import TOOLS
 
 MAX_TOOL_ROUNDS = 4
 MAX_BAD_ARGS = 2
 _DOC_MARK = re.compile(r"[\[【]\s*(KB-\d+)\s*[\]】]")
-_NUMBER = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
+#: 数字：支持半角/全角负号、千分位、小数；中文紧贴、负数、百分比里的数字都要认。
+_NUMBER = re.compile(r"[-−－]?\s*\d+(?:,\d{3})*(?:\.\d+)?")
 #: 日期类写法不算“经营数字”，校验数字时先剔除，省得把 2026 年 7 月这种
 #: 结构性信息当成需要证据支撑的业务数值。
 _DATE_FORMS = (
@@ -240,16 +242,18 @@ class LiveEngine:
     def _allowed_numbers(self, evidence: list[dict], retrieved_docs: dict) -> list[float]:
         """允许出现在回答里的数字，只来自两处真实证据：
 
-        - 工具/查询的**实际结果**（``evidence``）；
+        - 工具/查询**实际返回的数据值**（``evidence[i]["result"]`` 里的值）；
         - 本轮检索到的**文档片段原文**。
 
-        不再把整篇文档、问题原文、工具参数里的数字算作许可——那正是“数字只要
-        在别处出现过就放行”的漏洞，会让模型把没查到的数字蒙混过去。
+        明确**不**从这些地方取数：工具入参（``params``）、SQL 原文、
+        字段名（``columns``）、截断说明（``note``/``bytes_before``）——它们要么是
+        输入、要么是元信息，拿它们当许可等于给“数字只要在别处出现过就放行”开口子。
         日期类写法由 ``_numbers_in`` 直接剔除，不需要额外白名单。
         """
         allowed: list[float] = []
         for item in evidence:
-            allowed.extend(_numbers_in(json.dumps(item, ensure_ascii=False)))
+            if isinstance(item, dict):
+                allowed.extend(_data_numbers(item.get("result")))
         for hits in retrieved_docs.values():
             for hit in hits:
                 allowed.extend(_numbers_in(hit.get("text") or ""))
@@ -262,12 +266,43 @@ class LiveEngine:
         return sorted(set(allowed + derived))
 
 
+def _data_numbers(value: Any) -> list[float]:
+    """只从**数据值**里取数，跳过字典的键与元信息字段。
+
+    这样 ``sql`` 文本里的条件值、``columns`` 里的字段名、``note`` 里的字节数
+    都不会被当成业务数字。
+    """
+    values: list[float] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key) in EVIDENCE_META_KEYS:
+                continue
+            values.extend(_data_numbers(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            values.extend(_data_numbers(item))
+    elif isinstance(value, bool):
+        return values  # True/False 不是业务数字
+    elif isinstance(value, (int, float)):
+        values.append(float(value))
+    elif isinstance(value, str):
+        values.extend(_numbers_in(value))
+    return values
+
+
+#: ASCII 字母/数字/下划线。**只**用 ASCII 判断“数字是否紧贴编号”：
+#: 中文汉字的 ``str.isalnum()`` 也是 True，用它会把“是9999999元”里的数字误删。
+_ASCII_IDENT = set(string.ascii_letters + string.digits + "_")
+
+
 def _numbers_in(text: str) -> list[float]:
-    """取出需要证据支撑的数字，剔除日期与编号。
+    """取出需要证据支撑的数字。
 
     - 日期类写法（``2026-07-01``、``2026 年 7 月``、裸年份）先抹掉：它们是结构性
       信息，不是需要查询结果的经营数字。
-    - 紧跟在字母/数字后的数字不算（``S02``、``P06``、``KB-013`` 是编号）。
+    - 负数（``-500``、全角 ``－500``）与百分比（``25.3%``）里的数字照常取出。
+    - 紧贴在 **ASCII** 字母/数字后的数字才算编号并剔除（``S02``、``P06``、``KB-013``）；
+      中文紧贴数字（``是9999999元``）是正常表述，必须识别出来。
     """
     cleaned = text or ""
     for pattern in _DATE_FORMS:
@@ -275,10 +310,14 @@ def _numbers_in(text: str) -> list[float]:
     values: list[float] = []
     for match in _NUMBER.finditer(cleaned):
         start = match.start()
-        if start > 0 and cleaned[start - 1].isalnum():
+        if start > 0 and cleaned[start - 1] in _ASCII_IDENT:
             continue
+        token = re.sub(r"\s+", "", match.group(0))
+        token = (
+            token.replace(",", "").replace("−", "-").replace("－", "-").replace("\u00a0", "")
+        )
         try:
-            values.append(float(match.group(0).replace(",", "")))
+            values.append(float(token))
         except ValueError:
             continue
     return values

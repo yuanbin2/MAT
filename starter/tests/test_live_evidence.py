@@ -10,7 +10,7 @@ import json
 import re
 from types import SimpleNamespace
 
-from kbqa.live import LiveEngine
+from kbqa.live import LiveEngine, _numbers_in
 from kbqa.schemas import Answer
 from kbqa.sqlguard import MAX_EVIDENCE_BYTES
 from kbqa.trace import Trace
@@ -237,3 +237,141 @@ def test_live_evidence_result_capped():
         blob = json.dumps(item["result"], ensure_ascii=False).encode("utf-8")
         assert len(blob) <= MAX_EVIDENCE_BYTES
     assert answer.answer == "净营业额是 12345 元。"
+
+
+# -- 数字提取：中文紧贴、负数、百分比要认；编号要排除 ---------------------------
+
+
+def test_numbers_chinese_adjacent_are_recognized():
+    # 这是一个真实漏洞：中文汉字的 isalnum() 也是 True，按字符类判断会把数字误删。
+    assert _numbers_in("净营业额是9999999元") == [9999999.0]
+    assert _numbers_in("净营业额是162414元") == [162414.0]
+    assert _numbers_in("卖出118份") == [118.0]
+
+
+def test_numbers_negative_are_recognized():
+    assert _numbers_in("退款是-500元") == [-500.0]
+    assert _numbers_in("退款金额 －500 元") == [-500.0]
+
+
+def test_numbers_percentage_are_recognized():
+    assert _numbers_in("占比是25.3%") == [25.3]
+    assert 25.0 in _numbers_in("占比 25%")
+
+
+def test_identifier_numbers_are_excluded():
+    assert _numbers_in("S02 门店") == []
+    assert _numbers_in("P06 商品") == []
+    assert _numbers_in("见 KB-013") == []
+    assert _numbers_in("KB-013、S02、P06 都不要") == []
+    # 但同一句里的真实业务数字仍要取出来
+    assert _numbers_in("S02 卖了 118 份") == [118.0]
+
+
+def test_date_like_tokens_are_ignored():
+    assert _numbers_in("2026-07-01") == []
+    assert _numbers_in("2026 年 7 月") == []
+
+
+def test_regression_result_100_must_reject_answer_9999999():
+    """题目要求的回归：查询结果只有 100，回答写 9999999，必须拒绝。"""
+    engine = make_engine(FakeFacts({}))
+    plan = _plan("净营业额是多少")
+    evidence = [
+        {
+            "tool": "query_metrics",
+            "params": {"start": "2026-07-01", "end": "2026-07-31"},
+            "result": {"net_revenue": 100.0, "orders": 2},
+        }
+    ]
+    trace = Trace("n1", plan.question)
+    answer = engine._finalise(plan, "净营业额是9999999元。", evidence, {}, trace)
+    assert answer.answer == "（兜底：按工具结果模板回答）"
+    assert any(step["step"] == "number_check_failed" for step in trace.steps)
+
+
+def test_regression_chinese_adjacent_grounded_number_passes():
+    engine = make_engine(FakeFacts({}))
+    plan = _plan("净营业额是多少")
+    evidence = [{"tool": "query_metrics", "params": {}, "result": {"net_revenue": 162414.0}}]
+    answer = engine._finalise(plan, "净营业额是162414元。", evidence, {}, Trace("n2", plan.question))
+    assert answer.answer == "净营业额是162414元。"
+
+
+# -- 白名单只读“实际返回的数据值” -----------------------------------------------
+
+
+def test_whitelist_ignores_sql_text_and_params():
+    """SQL 条件里含 9999999、结果为 NULL —— 不能把 9999999 当成许可。"""
+    engine = make_engine(FakeFacts({}))
+    plan = _plan("查一下门店")
+    sql = "SELECT net_revenue FROM sales_clean WHERE net_revenue = 9999999"
+    evidence = [
+        {
+            "tool": "run_sql",
+            "params": {"sql": sql},
+            "result": {
+                "sql": sql,
+                "columns": ["net_revenue"],
+                "rows": [{"net_revenue": None}],
+                "row_count": 1,
+                "truncated": False,
+            },
+        }
+    ]
+    trace = Trace("n3", plan.question)
+    answer = engine._finalise(plan, "净营业额是9999999元。", evidence, {}, trace)
+    assert answer.answer == "（兜底：按工具结果模板回答）"
+    assert any(step["step"] == "number_check_failed" for step in trace.steps)
+
+
+def test_whitelist_ignores_column_names_and_notes():
+    engine = make_engine(FakeFacts({}))
+    plan = _plan("查一下门店")
+    evidence = [
+        {
+            "tool": "run_sql",
+            "params": {},
+            "result": {
+                "sql": "SELECT 1 FROM stores",
+                "columns": ["total_9999999"],
+                "rows": [],
+                "row_count": 0,
+                "note": "结果超过 4096 字节，bytes_before=8888888；请缩小查询范围",
+            },
+        }
+    ]
+    trace = Trace("n4", plan.question)
+    for fabricated in ("9999999", "8888888", "4096"):
+        answer = engine._finalise(plan, "这个数是%s。" % fabricated, evidence, {}, trace)
+        assert answer.answer == "（兜底：按工具结果模板回答）", fabricated
+
+
+def test_whitelist_uses_actual_result_values():
+    engine = make_engine(FakeFacts({}))
+    plan = _plan("查一下门店")
+    evidence = [
+        {
+            "tool": "run_sql",
+            "params": {},
+            "result": {
+                "sql": "SELECT net_revenue FROM sales_clean",
+                "columns": ["net_revenue"],
+                "rows": [{"net_revenue": 162414.0}],
+                "row_count": 1,
+            },
+        }
+    ]
+    answer = engine._finalise(plan, "净营业额是162414元。", evidence, {}, Trace("n5", plan.question))
+    assert answer.answer == "净营业额是162414元。"
+
+
+def test_whitelist_reads_retrieved_chunks_only():
+    """本轮检索片段里的数字可以引用，未检索到的整篇文档里不行。"""
+    facts = FakeFacts({"KB-100": "无关段落。第二段：满 500 送 60。"})
+    engine = make_engine(facts)
+    plan = _plan("会员活动")
+    retrieved = {"KB-100": [{"doc_id": "KB-100", "text": "无关段落。"}]}
+    trace = Trace("n6", plan.question)
+    answer = engine._finalise(plan, "满500送60 [KB-100]。", [], retrieved, trace)
+    assert answer.answer == "（兜底：按工具结果模板回答）"
