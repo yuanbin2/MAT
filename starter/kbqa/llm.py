@@ -26,6 +26,20 @@ RETRYABLE_KINDS = ("empty_content", "insufficient_system_resource", "transport")
 MAX_TRACE_TEXT = 200_000
 
 
+def redact_secret(text: str, secret: str = "") -> str:
+    """把文本里的密钥擦掉。所有会写进 trace / 回答的错误信息都必须过这一层。
+
+    除了替换已知的 Key，还用正则兜底 ``Bearer …`` 与 ``sk-…`` 形态——
+    模型或网关把 Key 回显在响应正文里（例如非法 JSON 的调试信息）时也擦得掉。
+    """
+    text = text or ""
+    if secret:
+        text = text.replace(secret, "***")
+    text = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "Bearer ***", text)
+    text = re.sub(r"sk-[A-Za-z0-9_\-]{6,}", "sk-***", text)
+    return text
+
+
 @dataclass
 class LLMError(Exception):
     kind: str
@@ -77,12 +91,7 @@ class LLMClient:
 
         只擦认证信息，不改动提示词与模型输出，保证可观察性。
         """
-        text = text or ""
-        if self.api_key:
-            text = text.replace(self.api_key, "***")
-        text = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "Bearer ***", text)
-        text = re.sub(r"sk-[A-Za-z0-9_\-]{6,}", "sk-***", text)
-        return text
+        return redact_secret(text, self.api_key)
 
     def _clip(self, text: str) -> str:
         if len(text) <= MAX_TRACE_TEXT:
@@ -123,13 +132,15 @@ class LLMClient:
                 timeout=httpx.Timeout(timeout or self.timeout, connect=15.0),
             )
         except httpx.TimeoutException as exc:
-            record.update(error="timeout", detail=self._mask(str(exc)))
+            detail = self._mask("等待模型响应超时：%s" % exc)
+            record.update(error="timeout", detail=detail)
             self._note(on_call, record, started)
-            raise LLMError("timeout", "等待模型响应超时：%s" % exc) from exc
+            raise LLMError("timeout", detail) from exc
         except httpx.HTTPError as exc:
-            record.update(error="transport", detail=self._mask(str(exc)))
+            detail = self._mask("调用模型失败：%s" % exc)
+            record.update(error="transport", detail=detail)
             self._note(on_call, record, started)
-            raise LLMError("transport", "调用模型失败：%s" % exc) from exc
+            raise LLMError("transport", detail) from exc
 
         record["status"] = response.status_code
         # 契约 §6：模型**原始响应**也要留痕（脱敏后完整保存）。
@@ -146,9 +157,12 @@ class LLMClient:
         try:
             payload = json.loads(response.text.strip() or "{}")
         except ValueError as exc:
-            record.update(error="bad_json", detail=self._mask(response.text[:200]))
+            # 非 JSON 的响应正文可能回显了 Key（调试信息、错误页），
+            # 记录与抛出的信息都必须先脱敏。
+            detail = self._mask("模型返回的不是合法 JSON：%s" % response.text[:200])
+            record.update(error="bad_json", detail=detail)
             self._note(on_call, record, started)
-            raise LLMError("bad_json", "模型返回的不是合法 JSON：%s" % response.text[:200]) from exc
+            raise LLMError("bad_json", detail) from exc
 
         choices = payload.get("choices") or []
         if not choices:

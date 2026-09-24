@@ -15,7 +15,7 @@ from .config import Settings, load_settings
 from .entities import Catalog
 from .index import load_index
 from .live import LiveEngine
-from .llm import LLMClient, LLMError
+from .llm import LLMClient, LLMError, redact_secret
 from .planner import Planner
 from .retriever import Retriever
 from .sessions import SessionStore
@@ -148,8 +148,12 @@ class Service:
             "trace_id": trace.trace_id,
         }
         trace.step("response", {"answer_type": answer.answer_type, "notes": answer.notes})
-        self.traces.save(trace)
+        # 落盘前统一脱敏：无论错误信息从哪条路径来，trace 里都不出现 Key。
+        self.traces.save(trace, redactor=self._redact)
         return payload
+
+    def _redact(self, payload):
+        return _redact_payload(payload, self.settings.llm_api_key)
 
     def _answer(self, trace: Trace, session_id: Optional[str], question: str) -> Answer:
         try:
@@ -209,19 +213,32 @@ class Service:
             trace.step("answer_live", {"answer_type": answer.answer_type}, started=started)
             return answer
         except LLMError as exc:
+            # 异常信息本身可能回显 Key（如非法 JSON 的响应正文），这里再脱敏一遍。
+            detail = redact_secret(exc.detail, self.settings.llm_api_key)
             trace.error("llm", exc)
-            trace.step("answer_live_failed", {"kind": exc.kind, "detail": exc.detail}, started=started)
+            trace.step("answer_live_failed", {"kind": exc.kind, "detail": detail}, started=started)
             return Answer(
                 answer="模型服务这次没有正常返回（%s），为了不给出没有依据的数字，这个问题先不回答。"
                 "可以稍后重试；失败的真实原因记在 trace 里。" % _reason_cn(exc),
                 answer_type="refusal",
-                notes=["live 模式失败：%s" % exc.detail],
+                notes=["live 模式失败：%s" % detail],
             )
 
     # -- trace ------------------------------------------------------------------
 
     def get_trace(self, trace_id: str) -> Optional[dict]:
         return self.traces.get(trace_id)
+
+
+def _redact_payload(value, secret: str):
+    """递归脱敏：trace 里的任何字符串（提示词、原始响应、错误详情）都过一遍。"""
+    if isinstance(value, str):
+        return redact_secret(value, secret)
+    if isinstance(value, dict):
+        return {key: _redact_payload(item, secret) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_payload(item, secret) for item in value]
+    return value
 
 
 def _reason_cn(exc: LLMError) -> str:

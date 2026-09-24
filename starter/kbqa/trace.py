@@ -72,10 +72,18 @@ class TraceStore:
             self._counter += 1
             return "t-%s-%04d" % (today.replace("-", ""), self._counter)
 
-    def save(self, trace: Trace) -> None:
+    def save(self, trace: Trace, redactor=None) -> None:
+        """保存一次问答的 trace。
+
+        ``redactor`` 是最后一道闸：无论错误信息从哪条路径进来（模型响应回显、
+        工具异常、第三方库报错），落盘前统一过一遍脱敏，保证 trace 里绝不出现密钥。
+        """
+        payload = trace.as_dict()
+        if redactor is not None:
+            payload = redactor(payload)
         with self._lock:
-            self._data[trace.trace_id] = trace.as_dict()
-            self._data.move_to_end(trace.trace_id)
+            self._data[payload["trace_id"]] = payload
+            self._data.move_to_end(payload["trace_id"])
             while len(self._data) > self.capacity:
                 self._data.popitem(last=False)
 
