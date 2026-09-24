@@ -290,11 +290,17 @@ class LiveEngine:
         模型凭记忆点名一份文档、或点名一份根本没检索到的文档，都不算数；
         引用句也从本轮检索到的片段里挑，而不是从整篇文档里挑——这样引用必然
         落在实际拿到的证据上，逐字可核对。
+        问经营数字时（``plan.needs_data``），周报/纪要/复盘里的估算数字不能当证据
+        （KB-001 §5.2），这类文档直接不引用，避免“大概 150 份”混进“实绩 125 份”。
         """
         query = plan.search_query or plan.standalone
+        facts = getattr(self.answerer, "facts", None)
+        docs_meta = getattr(getattr(facts, "index", None), "docs_meta", {})
         citations: list[dict] = []
         for doc_id in doc_ids[:3]:
             if doc_id not in retrieved_docs:
+                continue
+            if getattr(plan, "needs_data", False) and docs_meta.get(doc_id, {}).get("estimates_only"):
                 continue
             citation = self._quote_from_retrieved(query, doc_id, retrieved_docs[doc_id])
             if citation:

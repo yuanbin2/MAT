@@ -19,8 +19,10 @@ from kbqa.trace import Trace
 class FakeFacts:
     """只实现 LiveEngine 用到的两个方法：挑句权重与逐字核对。"""
 
-    def __init__(self, texts=None):
+    def __init__(self, texts=None, docs_meta=None):
         self.texts = texts or {}
+        self.docs_meta = docs_meta or {}
+        self.index = SimpleNamespace(docs_meta=self.docs_meta)
 
     def term_weights(self, query):
         from kbqa.tokenizer import tokenize
@@ -399,3 +401,37 @@ def test_doc_target_value_allowed_but_fabricated_actual_rejected():
     )
     assert bad.answer == "（兜底：按工具结果模板回答）"
     assert any(step["step"] == "number_check_failed" for step in trace.steps)
+
+
+def test_estimate_doc_not_cited_for_business_numbers():
+    """问经营数字时，周报/纪要里的估算（estimates_only）不能进引用（KB-001 §5.2）。"""
+    facts = FakeFacts(
+        {"KB-023": "618 目标销量 120 份。", "KB-050": "牛肉poke 卖了大概 150 份，估摸着五千出头。"},
+        docs_meta={
+            "KB-023": {"title": "活动方案", "estimates_only": False},
+            "KB-050": {"title": "周报", "estimates_only": True},
+        },
+    )
+    engine = make_engine(facts)
+    plan = _plan("618 目标与实绩")
+    plan.needs_data = True
+    retrieved = {
+        "KB-023": [{"doc_id": "KB-023", "text": "618 目标销量 120 份。"}],
+        "KB-050": [{"doc_id": "KB-050", "text": "牛肉poke 卖了大概 150 份，估摸着五千出头。"}],
+    }
+    citations = engine._citations(plan, ["KB-023", "KB-050"], retrieved)
+    assert [c["doc_id"] for c in citations] == ["KB-023"]
+
+
+def test_estimate_doc_allowed_when_not_asking_numbers():
+    """问原因/决议时，纪要类文档是权威出处，不应被误伤。"""
+    facts = FakeFacts(
+        {"KB-050": "会议决定下架牛肉poke。"},
+        docs_meta={"KB-050": {"title": "纪要", "estimates_only": True}},
+    )
+    engine = make_engine(facts)
+    plan = _plan("为什么下架")
+    plan.needs_data = False
+    retrieved = {"KB-050": [{"doc_id": "KB-050", "text": "会议决定下架牛肉poke。"}]}
+    citations = engine._citations(plan, ["KB-050"], retrieved)
+    assert [c["doc_id"] for c in citations] == ["KB-050"]
