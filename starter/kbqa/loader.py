@@ -63,7 +63,7 @@ class Document:
             "doc_id": self.doc_id,
             "title": self.title,
             "type": self.doc_type,
-            "state": self.status,
+            "status": self.status,
             "effective_from": self.effective_from.isoformat() if self.effective_from else None,
             "superseded_by": self.superseded_by,
             "stores": self.stores,
@@ -89,6 +89,17 @@ def decode_bytes(raw: bytes, path: Path, warnings: list[str]) -> str:
         except UnicodeDecodeError:
             warnings.append("%s 不是合法 UTF-8/GB18030 文本，按替换字符解码" % path.name)
             return raw.decode("utf-8", errors="replace")
+
+
+_HTML_SCRIPT = re.compile(r"<(script|style)\b.*?</\1>", re.I | re.S)
+_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def html_to_text(text: str) -> str:
+    """把 HTML 转成可见正文，与评测脚本的逐字校验保持一致。"""
+    text = _HTML_SCRIPT.sub(" ", text)
+    text = _HTML_TAG.sub(" ", text)
+    return html_module.unescape(text)
 
 
 def parse_front_matter(text: str) -> tuple[dict, str]:
@@ -183,10 +194,12 @@ def load_document(path: Path) -> Optional[Document]:
     if fmt == "md":
         meta, text = parse_front_matter(text)
     elif fmt == "html":
-        # html 直接按文本入库，标签也就那么几个，BM25 自己会忽略。
+        # HTML 转成“可见正文”：去掉 script/style 与标签、反转义，再入库。
+        # 这样标签不会污染检索，也能和评测脚本的逐字校验对齐。
         match_title = _HTML_TITLE.search(text)
         html_title = html_module.unescape(match_title.group(1).strip()) if match_title else ""
         meta = {"title": html_title.split("-")[0].strip() or html_title}
+        text = html_to_text(text)
 
     match = _DOC_ID.match(path.name)
     doc_id = str(meta.get("doc_id") or (match.group(1) if match else "")).strip()
