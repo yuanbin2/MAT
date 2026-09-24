@@ -201,10 +201,19 @@ def load_document(path: Path) -> Optional[Document]:
         meta = {"title": html_title.split("-")[0].strip() or html_title}
         text = html_to_text(text)
 
+    # doc_id 一律以**文件名开头**的 KB-xxx 为准（契约 §0）：新建、改名、复制
+    # 文档时编号跟着文件名走，不依赖 YAML 头写没写对。
     match = _DOC_ID.match(path.name)
-    doc_id = str(meta.get("doc_id") or (match.group(1) if match else "")).strip()
-    if not doc_id:
+    if not match:
         return None
+    doc_id = match.group(1)
+    declared_id = str(meta.get("doc_id") or "").strip()
+    if declared_id and declared_id != doc_id:
+        # 元数据与文件名冲突：不静默取其一，明确告警并说明以谁为准。
+        warnings.append(
+            "元数据 doc_id=%s 与文件名 %s 不一致，已以文件名为准（%s）"
+            % (declared_id, path.name, doc_id)
+        )
 
     declared = meta.get("stores")
     stores = declared or _sorted_unique(_STORE_CODE.findall(text))
