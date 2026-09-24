@@ -7,7 +7,8 @@
    金额去掉 ``¥`` 前缀与空白后按数字解析；数量按整数解析。
 2. 再按顺序剔除（§3）：
    日期无法解析 → 金额为空 → 数量 ≤ 0 → 门店外键无效 → 商品外键无效 →
-   完全重复（七个字段规范化后完全一致只保留一条）。
+   完全重复（七个字段规范化后完全一致只保留一条）；
+   另把“金额无法解析”“数量无法按整数解析”两类数据异常单独归类剔除。
 """
 
 from __future__ import annotations
@@ -24,7 +25,9 @@ from typing import Iterable, Optional
 #: 金额里的 `¥` / `￥` 去掉再按数字解析（KB-001 §2.3）。
 _CURRENCY = str.maketrans("", "", "¥￥ \t　")
 
-#: KB-001 §3 的六类剔除原因，顺序固定，供数据质量面板与评测展示。
+#: 剔除原因，顺序固定，供数据质量面板与评测展示。
+#: 前六类是 KB-001 §3 明文规定的；后两类是手册未单列、但现实中存在的
+#: “无法解析”情形，单独归类保证“原始 − 保留 = 各类剔除之和”在任何数据下都成立。
 REMOVAL_REASONS = (
     "1_unparseable_date",
     "2_empty_amount",
@@ -32,6 +35,8 @@ REMOVAL_REASONS = (
     "4_store_not_in_stores",
     "5_product_not_in_products",
     "6_duplicate_row",
+    "7_unparseable_amount",
+    "8_qty_unparseable",
 )
 
 #: 可恢复的格式问题（规范化后保留，不算剔除），单独统计以便面板区分。
@@ -56,14 +61,22 @@ def parse_amount(value: Optional[str]) -> tuple[Optional[int], str]:
 
 
 def parse_qty(value: Optional[str]) -> Optional[int]:
-    """KB-001 §2.4：按整数解析。解析不了的返回 None，由调用方按 0 处理（§3.3 剔除）。"""
+    """KB-001 §2.4：按整数解析。
+
+    解析失败或**非整数**（如 ``1.5``）都返回 None——不静默截断，
+    由调用方归入“数量无法解析”剔除。
+    """
     text = (value or "").strip()
     if not text:
         return None
     try:
-        return int(Decimal(text))
+        number = Decimal(text)
     except (InvalidOperation, ValueError):
         return None
+    if number != number.to_integral_value():
+        # 有小数部分，不是整数，不能悄悄取整。
+        return None
+    return int(number)
 
 
 def normalize_code(value: Optional[str]) -> str:
@@ -116,18 +129,17 @@ class CleaningReport:
     kept_sales_rows: int = 0
     kept_refund_rows: int = 0
     removed: dict[str, int] = field(default_factory=lambda: {k: 0 for k in REMOVAL_REASONS})
-    note_unparseable_amount: int = 0
     normalized: dict[str, int] = field(
         default_factory=lambda: {k: 0 for k in NORMALIZED_FIELDS})
 
     @property
     def removed_total(self) -> int:
-        return sum(self.removed.values()) + self.note_unparseable_amount
+        return sum(self.removed.values())
 
     def as_dict(self) -> dict:
         return {
             "raw_rows": self.raw_rows,
-            "removed": dict(self.removed, note_unparseable_amount=self.note_unparseable_amount),
+            "removed": dict(self.removed),
             "kept_rows": self.kept_rows,
             "kept_sales_rows": self.kept_sales_rows,
             "kept_refund_rows": self.kept_refund_rows,
@@ -175,17 +187,20 @@ def clean_rows(
             report.removed["1_unparseable_date"] += 1
             continue
 
-        # §3.2 金额为空（不回填）；无法解析的非空金额单独记账并剔除
+        # §3.2 金额为空（不回填）；非空但无法解析的金额单独归类剔除
         cents, status = parse_amount(raw_amount)
         if status == "empty":
             report.removed["2_empty_amount"] += 1
             continue
         if status == "bad":
-            report.note_unparseable_amount += 1
+            report.removed["7_unparseable_amount"] += 1
             continue
 
-        # §3.3 数量 ≤ 0（解析不了按 0 处理）
-        qty = parse_qty(raw_qty) or 0
+        # §3.3 数量 ≤ 0；无法按整数解析（非整数/非数字）单独归类
+        qty = parse_qty(raw_qty)
+        if qty is None:
+            report.removed["8_qty_unparseable"] += 1
+            continue
         if qty <= 0:
             report.removed["3_qty_le_zero"] += 1
             continue
@@ -221,8 +236,10 @@ def clean_rows(
             report.normalized["date_format"] += 1
 
     report.kept_rows = len(kept)
-    report.kept_refund_rows = sum(1 for row in kept if row[-1])
-    report.kept_sales_rows = report.kept_rows - report.kept_refund_rows
+    # 销售行 / 退款行按金额符号区分（KB-001 §4）：零金额行两者都不是，
+    # 不计入销售也不计入退款，所以不能用 `is_refund`（它把零金额当“非退款”）。
+    report.kept_sales_rows = sum(1 for row in kept if row[5] > 0)
+    report.kept_refund_rows = sum(1 for row in kept if row[5] < 0)
     return kept, report
 
 

@@ -107,7 +107,9 @@ class DataTools:
                    COALESCE(-SUM(CASE WHEN amount_cents < 0 THEN amount_cents ELSE 0 END), 0)
                        AS refund_cents,
                    COUNT(DISTINCT CASE WHEN amount_cents > 0 THEN order_id END) AS orders,
-                   COALESCE(SUM(CASE WHEN amount_cents > 0 THEN qty ELSE -qty END), 0) AS qty
+                   COALESCE(SUM(CASE WHEN amount_cents > 0 THEN qty
+                                     WHEN amount_cents < 0 THEN -qty
+                                     ELSE 0 END), 0) AS qty
             FROM sales_clean WHERE %s
             """
             % where,
@@ -164,9 +166,11 @@ class DataTools:
         rows = self.conn.execute(
             """
             SELECT payment,
-                   COUNT(DISTINCT CASE WHEN is_refund=0 THEN order_id END),
+                   COUNT(DISTINCT CASE WHEN amount_cents > 0 THEN order_id END),
                    COALESCE(SUM(amount_cents), 0),
-                   COALESCE(SUM(CASE WHEN is_refund=0 THEN qty ELSE -qty END), 0)
+                   COALESCE(SUM(CASE WHEN amount_cents > 0 THEN qty
+                                     WHEN amount_cents < 0 THEN -qty
+                                     ELSE 0 END), 0)
             FROM sales_clean WHERE %s GROUP BY payment
             """
             % where,
@@ -200,7 +204,9 @@ class DataTools:
             SELECT s.product_id, p.product_name, p.product_category,
                    COALESCE(SUM(s.amount_cents), 0),
                    COUNT(DISTINCT CASE WHEN s.amount_cents > 0 THEN s.order_id END),
-                   COALESCE(SUM(CASE WHEN s.amount_cents > 0 THEN s.qty ELSE -s.qty END), 0)
+                   COALESCE(SUM(CASE WHEN s.amount_cents > 0 THEN s.qty
+                                     WHEN s.amount_cents < 0 THEN -s.qty
+                                     ELSE 0 END), 0)
             FROM sales_clean s LEFT JOIN products p ON p.product_id = s.product_id
             WHERE %s GROUP BY s.product_id ORDER BY 4 DESC
             """
@@ -267,7 +273,7 @@ class DataTools:
 
     def first_sale_date(self, product_id: str) -> Optional[str]:
         row = self.conn.execute(
-            "SELECT MIN(date) FROM sales_clean WHERE product_id = ? AND is_refund = 0",
+            "SELECT MIN(date) FROM sales_clean WHERE product_id = ? AND amount_cents > 0",
             (product_id.strip().upper(),),
         ).fetchone()
         return row[0] if row and row[0] else None
@@ -286,7 +292,7 @@ class DataTools:
         rows = self.conn.execute(
             """
             SELECT date, amount_cents, qty, store_id FROM sales_clean
-            WHERE product_id = ? AND is_refund = 0 AND qty > 0 AND date >= ? AND date <= ?%s
+            WHERE product_id = ? AND amount_cents > 0 AND qty > 0 AND date >= ? AND date <= ?%s
             ORDER BY date
             """
             % clause,

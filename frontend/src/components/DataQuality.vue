@@ -8,7 +8,7 @@ const props = defineProps<{
   loading: boolean
 }>()
 
-// 六类剔除原因，顺序固定（KB-001 §3）。
+// 剔除原因，顺序固定：前六类为 KB-001 §3 明文规定，后两类为补充的数据异常分类。
 const reasons = [
   { key: '1_unparseable_date', label: '日期无法解析' },
   { key: '2_empty_amount', label: '金额为空' },
@@ -16,6 +16,8 @@ const reasons = [
   { key: '4_store_not_in_stores', label: '门店外键无效' },
   { key: '5_product_not_in_products', label: '商品外键无效' },
   { key: '6_duplicate_row', label: '完全重复' },
+  { key: '7_unparseable_amount', label: '金额无法解析' },
+  { key: '8_qty_unparseable', label: '数量无法解析' },
 ]
 
 const normalizedItems = computed(() => {
@@ -32,7 +34,7 @@ const normalizedItems = computed(() => {
 const removedTotal = computed(() => {
   if (!props.report) return 0
   const r = props.report.removed
-  return reasons.reduce((sum, item) => sum + (r[item.key] ?? 0), 0) + (r.note_unparseable_amount ?? 0)
+  return reasons.reduce((sum, item) => sum + (r[item.key] ?? 0), 0)
 })
 
 const maxReason = computed(() => {
@@ -55,7 +57,9 @@ const maxReason = computed(() => {
         <div v-for="i in 4" :key="i" class="skeleton" style="height: 24px; margin-bottom: 10px"></div>
       </div>
 
-      <template v-else-if="report">
+      <div v-else-if="!report" class="dq__empty muted">暂无数据质量信息</div>
+
+      <template v-else>
         <div class="dq__summary">
           <div class="dq__stat">
             <div class="dq__stat-label">原始行数</div>
@@ -106,6 +110,12 @@ const maxReason = computed(() => {
 <style scoped>
 .dq__loading {
   min-height: 160px;
+}
+
+.dq__empty {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
 }
 
 .dq__summary {
