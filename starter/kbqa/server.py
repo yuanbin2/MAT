@@ -114,3 +114,21 @@ def data_quality() -> dict:
         "data_period": current.data_period,
         "kb_warnings": current.index.warnings,
     }
+
+
+@app.get("/api/stores")
+def stores() -> dict:
+    """门店列表（筛选用），只读。"""
+    return {"stores": service().tools.stores()}
+
+
+@app.get("/api/products/top")
+def products_top(
+    start: str = Query(...),
+    end: str = Query(...),
+    store_id: Optional[str] = None,
+    limit: int = Query(default=10, ge=1, le=100),
+):
+    """Top 商品排行（按净营业额降序），只读。"""
+    bad = _bad_date(start, end)
+    return bad or service().tools.top_products(start, end, store_id, limit)
