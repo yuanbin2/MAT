@@ -1,15 +1,20 @@
 # 经营看板 + 问答服务
 # 换数据或知识库：make rebuild DATA_DIR=/path/data KB_DIR=/path/kb
 
+# Windows 下虚拟环境的解释器在 Scripts/，其余平台在 bin/。
+ifeq ($(OS),Windows_NT)
+PY ?= .venv/Scripts/python
+else
 PY ?= .venv/bin/python
+endif
 PORT ?= 8000
 export DATA_DIR KB_DIR VAR_DIR LLM_BASE_URL LLM_API_KEY LLM_MODEL
 
 .PHONY: setup rebuild run test clean
 
 setup:          ## 建虚拟环境并装依赖
-	uv venv --python 3.12
-	uv pip install --python $(PY) -r requirements.txt
+	python -m venv .venv
+	$(PY) -m pip install -r requirements.txt
 
 rebuild:        ## 从 DATA_DIR 与 KB_DIR 重建清洗表和检索索引
 	$(PY) -m kbqa.rebuild
