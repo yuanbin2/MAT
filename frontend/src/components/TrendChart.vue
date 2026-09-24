@@ -21,6 +21,11 @@ function render() {
   if (!chartEl.value) return
   if (!chart) {
     chart = echarts.init(chartEl.value)
+  } else if (chart.getDom() !== chartEl.value) {
+    // 容器在 loading/空态之间被 v-if 卸载又重挂载，旧实例已脱离文档，
+    // 必须 dispose 后重新 init，否则图会画在看不见的旧 DOM 上。
+    chart.dispose()
+    chart = echarts.init(chartEl.value)
   }
 
   const dates = props.days.map((d) => d.date)
