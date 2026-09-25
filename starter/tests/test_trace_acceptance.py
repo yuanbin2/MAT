@@ -134,6 +134,10 @@ def _plan(**overrides):
         slots={},
     )
     base.update(overrides)
+    # 与 planner.py 保持一致：needs_docs 由 intent 决定（纯数据题不需要文档依据）。
+    # 否则 intent="data" 却 needs_docs=True 的 Plan 在真实链路里根本不会出现。
+    if "needs_docs" not in overrides:
+        base["needs_docs"] = base["intent"] in ("doc", "hybrid")
     return SimpleNamespace(**base)
 
 

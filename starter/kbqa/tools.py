@@ -18,6 +18,9 @@ from .sqlguard import (
 )
 
 METRIC_FIELDS = ("net_revenue", "refund_amount", "orders", "aov", "qty")
+#: `top_products` 最多给几条。模型要 20 条时会攒出 65 个数字，越过"证据卫生"上限
+#: （穷举数字不是证据）——公开题库 D03/T03、自拟题 X10 实测就是这样丢分的。
+MAX_TOP_PRODUCTS = 10
 
 
 def yuan(cents: int) -> float:
@@ -239,6 +242,12 @@ class DataTools:
         }
 
     def top_products(self, start: str, end: str, store_id=None, limit: int = 10) -> dict:
+        """按净营业额排前的商品。
+
+        ``limit`` 会夹到 ``MAX_TOP_PRODUCTS``：模型索要 20 条时，20 个商品 × 3 个数字
+        会攒出 65 个数字，越过"证据卫生"的上限（穷举数字不是证据）——
+        实测公开题库 D03/T03、自拟题 X10 就是这样丢分的。有界读取在这里收口。
+        """
         where, params = self._where(start, end, store_id)
         rows = self.conn.execute(
             """
@@ -265,7 +274,12 @@ class DataTools:
             }
             for r in rows
         ]
-        return {"start": start, "end": end, "store_id": store_id, "products": items[: max(1, limit)]}
+        try:
+            wanted = int(limit)
+        except (TypeError, ValueError):
+            wanted = 10
+        wanted = min(max(wanted, 1), MAX_TOP_PRODUCTS)
+        return {"start": start, "end": end, "store_id": store_id, "products": items[:wanted]}
 
     def by_store(self, start: str, end: str, product_id=None) -> dict:
         stores = []

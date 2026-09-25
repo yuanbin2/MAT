@@ -207,6 +207,7 @@ function exportJson() {
                   <td class="num nowrap">{{ h.score }}</td>
                   <td>
                     <span v-if="h.padded" class="tag tag--muted">补位</span>
+                    <span v-else-if="h.sibling" class="tag tag--muted">相邻</span>
                     <span v-if="h.kind === 'table'" class="tag tag--muted">表格</span>
                     <span class="clip">{{ h.preview }}</span>
                   </td>

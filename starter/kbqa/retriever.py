@@ -26,9 +26,24 @@ DOC_PRIOR = 0.35
 ALIAS_DOC_PENALTY = 0.5
 #: 周报、纪要里的数字是人工估的，问数字的时候给它们降点权。
 ESTIMATE_DOC_PENALTY = 0.7
-#: top-k 里一篇文档最多占一格：多留几篇不同的文档，比同一篇留两段有用；
-#: 回答需要更多段落时另外按 doc_id 取。
+#: 检索接口（`expand=False`）里一篇文档最多占一格：多留几篇不同的文档，
+#: 比同一篇留两段有用。实测支持这一点：自拟题 X04「Super Souper 晚上几点关门」
+#: 放开到两格后，KB-030 的第二块会把 gold 文档 KB-062 挤出 top-5。
 MAX_CHUNKS_PER_DOC = 1
+#: 问答链路（`expand=True`）放宽到两格。实测反过来的教训：
+#: 「冷萃乌龙茶上市第一个月的销量达标了吗」——匹配到商品名的是 KB-028 第 1 块，
+#: 而"首月目标 900 杯"在第 3 块，只占一格时第 3 块连候选都排不进，
+#: 模型只能答"知识库里没有查到目标数值"。
+QA_CHUNKS_PER_DOC = 2
+#: 问答链路额外把命中片段的**相邻片段**一起给模型：切块是把连续正文切开，
+#: 命中点前后一格常是同一句话/同一条目的另一半（英文邮件里赔款金额就在
+#: 命中片段的前一块）。检索接口不做扩展——契约要求它恰好返回 top_k 条。
+EXPAND_NEIGHBOURS = 1
+#: 相邻扩展最多补几条，避免一次塞太多无关正文进模型上下文。
+EXPAND_MAX_EXTRA = 6
+#: 只给**最相关这几篇**补上下文。全部命中都补会让模型看到太多候选，
+#: 实测把「牛肉poke 有哪些过敏原」的引用从 2 份撑到 3 份（cite_max=2 就不满足了）。
+EXPAND_TOP_DOCS = 3
 
 
 @dataclass
@@ -44,6 +59,8 @@ class Hit:
     dropped_instructions: list[str] = field(default_factory=list)
     padded: bool = False
     """凑数补上的：契约 §4 要求恰好返回 top_k 条，但问答链路不会用它作答。"""
+    sibling: bool = False
+    """相邻扩展补上的：问答链路额外拿的上下文，检索接口不会产生这种条目。"""
 
     def as_result(self) -> dict:
         return {
@@ -90,6 +107,7 @@ class SearchResult:
                     "chunk_id": hit.chunk_id,
                     "score": round(hit.score, 4),
                     "padded": hit.padded,
+                    "sibling": hit.sibling,
                     "kind": hit.kind,
                     "preview": hit.text[:120],
                     "dropped_instructions": hit.dropped_instructions,
@@ -214,7 +232,14 @@ class Retriever:
                 found.append(canonical)
         return found
 
-    def _hit(self, position: int, score: float, filtered: list[dict], padded: bool = False) -> Hit:
+    def _hit(
+        self,
+        position: int,
+        score: float,
+        filtered: list[dict],
+        padded: bool = False,
+        sibling: bool = False,
+    ) -> Hit:
         chunk = self.index.chunks[position]
         return Hit(
             doc_id=chunk.doc_id,
@@ -226,7 +251,56 @@ class Retriever:
             kind=chunk.kind,
             table_header=chunk.table_header,
             padded=padded,
+            sibling=sibling,
         )
+
+    def _expand_neighbours(
+        self,
+        hits: list[Hit],
+        adjusted: list[tuple[float, int]],
+        taken: set[int],
+        allowed: set[int],
+    ) -> list[Hit]:
+        """把命中片段的前后各 ``EXPAND_NEIGHBOURS`` 格补进来（问答链路专用）。
+
+        切块是把连续正文切开，命中点前后一格常常就是同一句话/同一条目的另一半：
+        「供应商后来赔了多少」里，赔款金额 `CNY 8,600` 正好落在命中片段的**前一块**。
+        只给基础结果时，模型看到的是被截断的半句话，只能答"没查到"。
+        """
+        score_of = {position: score for score, position in adjusted}
+        by_chunk_id: dict[str, int] = {}
+        for position in allowed:
+            by_chunk_id[self.index.chunks[position].chunk_id] = position
+
+        # 只给最相关的几篇补：全补会让模型手上候选太多，引用容易发散。
+        top_docs: list[str] = []
+        for hit in hits:
+            if hit.doc_id not in top_docs:
+                top_docs.append(hit.doc_id)
+        top_docs = top_docs[:EXPAND_TOP_DOCS]
+
+        extra: list[Hit] = []
+        for hit in hits:
+            if hit.doc_id not in top_docs:
+                continue
+            if len(extra) >= EXPAND_MAX_EXTRA:
+                break
+            try:
+                number = int((hit.chunk_id.split("#") or ["", "0"])[-1])
+            except ValueError:
+                continue
+            for delta in range(-EXPAND_NEIGHBOURS, EXPAND_NEIGHBOURS + 1):
+                if delta == 0 or len(extra) >= EXPAND_MAX_EXTRA:
+                    continue
+                neighbour_id = "%s#%d" % (hit.doc_id, number + delta)
+                position = by_chunk_id.get(neighbour_id)
+                if position is None or position in taken:
+                    continue
+                taken.add(position)
+                extra.append(
+                    self._hit(position, score_of.get(position, 0.0), [], sibling=True)
+                )
+        return hits + extra
 
     def search(
         self,
@@ -238,7 +312,12 @@ class Retriever:
         window: Optional[tuple[str, str]] = None,
         numeric: bool = False,
         historical: Optional[bool] = None,
+        expand: bool = False,
     ) -> SearchResult:
+        """``expand=True`` 时额外补上命中片段的相邻片段（只在问答链路用）。
+
+        `/api/retrieve` 不能开：契约 §4 要求索引够的时候**恰好**返回 top_k 条。
+        """
         as_of = as_of or self.today
         if historical is None:
             # `/api/retrieve` 没有规划器，问句里的“旧口径/以前”只能在这里认。
@@ -280,12 +359,13 @@ class Retriever:
             )
         adjusted.sort(key=lambda item: (-item[0], item[1]))
 
+        per_doc_limit = QA_CHUNKS_PER_DOC if expand else MAX_CHUNKS_PER_DOC
         hits: list[Hit] = []
         taken: set[int] = set()
         per_doc: dict[str, int] = {}
         for score, position in adjusted:
             chunk = self.index.chunks[position]
-            if per_doc.get(chunk.doc_id, 0) >= MAX_CHUNKS_PER_DOC:
+            if per_doc.get(chunk.doc_id, 0) >= per_doc_limit:
                 continue
             per_doc[chunk.doc_id] = per_doc.get(chunk.doc_id, 0) + 1
             taken.add(position)
@@ -319,6 +399,9 @@ class Retriever:
             # 契约 §4 还要求“按相关性从高到低”：补齐之后整体再排一次。
             # 每篇文档只占一格是挑片段的规则，不是排序的规则。
             hits.sort(key=lambda hit: -hit.score)
+
+        if expand:
+            hits = self._expand_neighbours(hits, adjusted, taken, allowed)
 
         return SearchResult(
             hits=hits,

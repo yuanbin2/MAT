@@ -320,3 +320,66 @@ def test_file_path_and_extension_rejected(db):
     ):
         out = tools.run_sql(sql)
         assert "error" in out, sql
+
+
+# -- top_products 的读取要有界（实测：limit=20 会攒出 65 个数字）----------------
+
+
+@pytest.fixture()
+def db_many_products(tmp_path):
+    """临时库：20 个商品，用来看 limit 会不会被夹住。"""
+    path = tmp_path / "many_products.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE sales_clean (order_id TEXT, date TEXT, store_id TEXT,"
+        " product_id TEXT, qty INTEGER, amount_cents INTEGER, payment TEXT, is_refund INTEGER)"
+    )
+    conn.execute(
+        "CREATE TABLE products (product_id TEXT, product_name TEXT, product_category TEXT)"
+    )
+    rows, products = [], []
+    for i in range(1, 21):
+        pid = "P%02d" % i
+        # 名字里不放数字：真实商品名（牛肉poke / 味噌拉面）也不含数字，
+        # 否则统计"证据里的数字个数"时会把名字里的数字算进去。
+        products.append((pid, "商品" + chr(ord("A") + i - 1), ["主食", "饮料", "小食"][i % 3]))
+        rows.append(("O%d" % i, "2026-06-05", "S01", pid, i, 1000 * i, "现金", 0))
+    conn.executemany("INSERT INTO sales_clean VALUES (?,?,?,?,?,?,?,?)", rows)
+    conn.executemany("INSERT INTO products VALUES (?,?,?)", products)
+    conn.commit()
+    conn.close()
+    return path
+
+
+def _count_numbers(payload) -> int:
+    """跟评测脚本同样口径地数一遍数字。"""
+    import re
+
+    return len(re.findall(r"-?\d+(?:\.\d+)?", json.dumps(payload, ensure_ascii=False)))
+
+
+def test_top_products_limit_is_capped(db_many_products):
+    """模型索要 20 条时只能拿到 MAX_TOP_PRODUCTS 条。
+
+    20 个商品 × 3 个数字 = 65 个数字，越过"证据卫生"的上限（穷举数字不是证据），
+    公开题库 D03/T03 与自拟题 X10 实测就是这样丢分的。
+    """
+    from kbqa import tools
+
+    got = tools.DataTools(db_many_products).top_products(
+        "2026-06-01", "2026-06-30", None, limit=20
+    )
+
+    assert len(got["products"]) <= tools.MAX_TOP_PRODUCTS
+    assert _count_numbers(got) <= 60, _count_numbers(got)
+
+
+def test_top_products_limit_is_still_usable(db_many_products):
+    """夹上限不能把正常请求也夹坏：要 3 条就给 3 条。"""
+    from kbqa import tools
+
+    got = tools.DataTools(db_many_products).top_products(
+        "2026-06-01", "2026-06-30", None, limit=3
+    )
+
+    assert len(got["products"]) == 3

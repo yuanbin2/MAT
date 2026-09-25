@@ -92,6 +92,8 @@ export interface TraceHit {
   chunk_id: string
   score: number
   padded: boolean
+  /** 问答链路额外补进来的相邻片段（切块把一句话切开时，答案常在隔壁一块）。 */
+  sibling?: boolean
   kind?: string
   preview?: string
 }

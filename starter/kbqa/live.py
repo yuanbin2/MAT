@@ -71,6 +71,10 @@ class LiveEngine:
         retrieved_docs: dict[str, list[dict]] = {}
         bad_args = 0
 
+        forced_retrieval = False
+        #: 是否**调用过** search_kb。零命中也算检索过——那时不该再替它检一次。
+        searched_kb = False
+
         for round_index in range(MAX_TOOL_ROUNDS + 1):
             remaining = deadline - time.perf_counter()
             if remaining < 10:
@@ -93,6 +97,18 @@ class LiveEngine:
                 messages, None if last_round else TOOLS, budget=remaining, on_call=trace.llm
             )
             if not reply.tool_calls:
+                # 规划判定"需要文档依据"，模型却一次都没检索就直接作答——多轮追问里
+                # 常见（它拿上一轮的上下文当依据）。实测后果：答案没有引用，还会编出
+                # 知识库里没有的替代品。这里先替它检一次再放行，只做一次。
+                if (
+                    bool(getattr(plan, "needs_docs", False))
+                    and not searched_kb
+                    and not last_round
+                    and not forced_retrieval
+                ):
+                    forced_retrieval = True
+                    self._force_retrieval(plan, trace, retrieved_docs, messages, reply)
+                    continue
                 return self._finalise(plan, reply.content, evidence, retrieved_docs, trace)
             # D8：assistant 消息整条追加，含 reasoning_content，否则下一轮 400。
             messages.append(reply.message)
@@ -120,6 +136,7 @@ class LiveEngine:
                     continue
                 started = time.perf_counter()
                 if name == "search_kb":
+                    searched_kb = True
                     # 检索必须继承本轮 Plan 的 as_of / historical / store_id / year /
                     # window / numeric 约束，复用 /api/retrieve 背后的同一套 retriever；
                     # 历史版本与生效日期由规划器决定，不靠模型猜。
@@ -205,6 +222,52 @@ class LiveEngine:
 
     # -- 工具执行（带 Plan 约束） -------------------------------------------------
 
+    def _force_retrieval(
+        self,
+        plan: Plan,
+        trace,
+        retrieved_docs: dict[str, list[dict]],
+        messages: list[dict],
+        reply,
+    ) -> None:
+        """替模型检一次：它没调 search_kb 就要作答，而 Plan 明确需要文档依据。
+
+        检索结果与正常工具调用走同一条路（同一套 Plan 约束、同样入 trace、
+        同样进 `retrieved_docs`），所以随后的引用校验与采纳状态核对都不变。
+        """
+        started = time.perf_counter()
+        params = {
+            "query": getattr(plan, "search_query", None) or getattr(plan, "question", ""),
+            "top_k": 5,
+        }
+        result = self._clean_kb_result(self._search_kb(params, plan, trace, started), trace)
+        hits = result.get("results") or []
+        trace.tool(
+            tool="search_kb",
+            params=params,
+            status="ok",
+            result=[{"doc_id": hit.get("doc_id"), "score": hit.get("score")} for hit in hits],
+            took_ms=(time.perf_counter() - started) * 1000,
+            pending=True,
+            retrieved_doc_ids=[hit.get("doc_id") for hit in hits],
+            source="live",
+        )
+        trace.step("forced_retrieval", {"query": params["query"], "hits": len(hits)})
+        for hit in hits:
+            doc_id = hit.get("doc_id")
+            if doc_id:
+                retrieved_docs.setdefault(doc_id, []).append(hit)
+        messages.append(reply.message)
+        messages.append(
+            {
+                "role": "user",
+                "content": "这次你没有调用 search_kb，我先按计划替你检索了一次，结果如下。"
+                "请依据这些片段作答并给出引用；片段里确实没有的，就明确说无法确定，"
+                "不要凭印象补：\n"
+                + json.dumps(hits, ensure_ascii=False),
+            }
+        )
+
     def _search_kb(self, params: dict, plan: Plan, trace, started: float) -> dict:
         """``search_kb`` 复用 /api/retrieve 背后的同一套 retriever，并注入本轮 Plan 的检索约束。
 
@@ -223,6 +286,9 @@ class LiveEngine:
             year=getattr(plan, "year", None),
             window=getattr(plan, "window", None),
             numeric=bool(slots.get("metric_explicit")) and bool(getattr(plan, "needs_data", False)),
+            # 模型拿到的是"检索到的片段"，而切块会把一句话切开：只有 live 需要补上下文。
+            # `/api/retrieve` 与 mock 链路不开——前者要恰好 top_k 条，后者本来就满分。
+            expand=True,
         )
         trace.step("search", result.as_trace(), started=started)
         return {"results": [hit.as_result() for hit in result.hits]}
