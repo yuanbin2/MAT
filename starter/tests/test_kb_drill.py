@@ -80,24 +80,94 @@ def test_index_path_can_be_redirected(tmp_path, monkeypatch):
     assert load_settings().index_path == target.resolve()
 
 
-def test_tracked_index_matches_real_knowledge_base():
-    """仓库里跟踪的索引缓存必须就是真实知识库的索引。
+def _index_problems(data: dict, kb_dir: Path) -> list[str]:
+    """判定"这份索引是不是当前知识库的索引"，返回问题列表。
 
-    只要哪次演练忘了重定向 INDEX_PATH，临时知识库（多一篇文档）重建出来的索引
-    就会把它覆盖掉，于是提交上去的索引与 `knowledge_base/` 对不上，
-    别人 clone 下来直接用的就是错的检索结果。
+    抽成独立函数是为了让守门逻辑本身也能被测：既要能认下正常索引，
+    也要能认出一份**过期的**索引（历史上真发生过：临时知识库的索引把仓库里
+    跟踪的那份覆盖了）。
     """
     from kbqa.index import content_key
 
-    assert TRACKED_INDEX.is_file(), "索引缓存在仓库里应当是被跟踪的"
-    tracked = json.loads(TRACKED_INDEX.read_text(encoding="utf-8"))
-    expected = content_key(REPO / "knowledge_base")
-    assert tracked.get("key") == expected, (
-        "跟踪的索引与真实知识库内容键不一致：索引=%s 期望=%s；"
-        "在 starter/ 下跑一次 `python -m kbqa.rebuild`（不要设 INDEX_PATH）即可修正"
-        % (tracked.get("key"), expected)
+    problems: list[str] = []
+    expected_key = content_key(kb_dir)
+    if data.get("key") != expected_key:
+        problems.append("内容键不一致：索引=%s 期望=%s" % (data.get("key"), expected_key))
+    expected_docs = _count_docs(kb_dir)
+    if len(data.get("docs") or {}) != expected_docs:
+        problems.append("文档数不一致：索引=%d 期望=%d" % (len(data.get("docs") or {}), expected_docs))
+    return problems
+
+
+def _git_blob(rev_spec: str = "HEAD:starter/.cache/index.json") -> bytes | None:
+    """直接从 git 里取某份内容——刻意不读工作区文件。
+
+    工作区文件可能被**同一个测试进程里更早的用例**重建过（例如某个用例用临时知识库
+    跑了一次 rebuild）。那样"工作区 == 真实知识库"会假通过，把提交里那份过期缓存放过去。
+    所以守门必须看 git 里的 blob。
+    """
+    proc = subprocess.run(
+        ["git", "show", rev_spec],
+        cwd=str(REPO),
+        capture_output=True,
+        check=False,
     )
-    assert len(tracked.get("docs", {})) == _count_docs(REPO / "knowledge_base")
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def test_index_guard_accepts_current_index():
+    """守门的正例：拿真实知识库算出来的索引应当被判为合格。"""
+    from kbqa.index import content_key
+
+    sample = {"key": content_key(REPO / "knowledge_base"), "docs": {}}
+    sample["docs"] = {str(i): {} for i in range(_count_docs(REPO / "knowledge_base"))}
+    assert _index_problems(sample, REPO / "knowledge_base") == []
+
+
+def test_index_guard_rejects_stale_index():
+    """守门的反例：过期索引（内容键不对、文档数也不对）必须被判为不合格。"""
+    stale = {"key": "f9b2ceda3da6" + "0" * 52, "docs": {}}
+    problems = _index_problems(stale, REPO / "knowledge_base")
+    assert any("内容键" in item for item in problems), problems
+    assert any("文档数" in item for item in problems), problems
+
+
+def test_committed_index_matches_real_knowledge_base():
+    """**提交里**的索引必须就是当前知识库的索引（顺序无关的守门）。
+
+    这条刻意读 `git show HEAD:...` 而不是工作区文件：只要跑测试的顺序里有人先重建过索引，
+    工作区就会被刷成最新的，那样提交里那份旧缓存放多久都不会被发现。
+    """
+    blob = _git_blob()
+    assert blob, "git 里读不到 starter/.cache/index.json（是不是没被跟踪？）"
+    problems = _index_problems(json.loads(blob.decode("utf-8")), REPO / "knowledge_base")
+    assert not problems, (
+        "提交里的索引与当前知识库不一致：%s。"
+        "修法：在 starter/ 下**不要**设 INDEX_PATH 跑一次 `python -m kbqa.rebuild`，把结果一起提交。"
+        % "；".join(problems)
+    )
+
+
+def test_working_tree_index_matches_real_knowledge_base():
+    """工作区那份也要合格（提交对了但工作区被改脏，同样会被 CI 的差异检查拦下）。"""
+    assert TRACKED_INDEX.is_file(), "索引缓存在仓库里应当是被跟踪的"
+    problems = _index_problems(
+        json.loads(TRACKED_INDEX.read_text(encoding="utf-8")), REPO / "knowledge_base"
+    )
+    assert not problems, "；".join(problems)
+
+
+def test_tracked_index_has_no_uncommitted_changes():
+    """被跟踪的索引不能有未提交差异——重建过就要提交结果，CI 也查这一条。"""
+    proc = subprocess.run(
+        ["git", "diff", "--quiet", "--", "starter/.cache/index.json"],
+        cwd=str(REPO),
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        "starter/.cache/index.json 与提交版本不一致：要么提交它，要么跑一次重建后提交"
+    )
 
 
 def test_new_doc_drill(real_retriever, tmp_path, monkeypatch):

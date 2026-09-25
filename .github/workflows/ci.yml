@@ -33,6 +33,15 @@ jobs:
         working-directory: starter
         run: python -m kbqa.rebuild
 
+      # 重建会重写被跟踪的 .cache/index.json。若它变了，说明提交里那份索引与当前知识库
+      # 不一致（比如有人改了知识库却忘了提交新索引），必须在仓库根检查差异。
+      - name: 校验重建后被跟踪的索引没有差异
+        run: |
+          if ! git diff --exit-code -- starter/.cache/index.json; then
+            echo "::error::重建后 starter/.cache/index.json 出现差异：提交里的索引与当前知识库不一致。请在 starter/ 下**不要**设 INDEX_PATH 执行 python -m kbqa.rebuild，并把结果一起提交。" >&2
+            exit 1
+          fi
+
       - name: 启动服务并等待健康检查
         working-directory: starter
         run: |
