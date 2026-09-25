@@ -62,6 +62,12 @@ class SearchResult:
     expansions: list[str]
     filtered: list[dict]
     coverage: float = 0.0
+    #: 本次检索实际用的约束（面板要看「检索范围」是不是符合预期）。
+    as_of: Optional[str] = None
+    store_id: Optional[str] = None
+    year: Optional[int] = None
+    window: Optional[tuple[str, str]] = None
+    historical: Optional[bool] = None
 
     @property
     def ranked(self) -> list[Hit]:
@@ -73,12 +79,19 @@ class SearchResult:
             "query": self.query,
             "expansions": self.expansions,
             "coverage": round(self.coverage, 3),
+            "as_of": self.as_of,
+            "store_id": self.store_id,
+            "year": self.year,
+            "window": list(self.window) if self.window else None,
+            "historical": self.historical,
             "hits": [
                 {
                     "doc_id": hit.doc_id,
                     "chunk_id": hit.chunk_id,
                     "score": round(hit.score, 4),
                     "padded": hit.padded,
+                    "kind": hit.kind,
+                    "preview": hit.text[:120],
                     "dropped_instructions": hit.dropped_instructions,
                 }
                 for hit in self.hits
@@ -314,6 +327,11 @@ class Retriever:
             expansions=expansions,
             filtered=filtered,
             coverage=self._coverage(query, adjusted, top_k),
+            as_of=as_of.isoformat(),
+            store_id=store_id,
+            year=year,
+            window=window,
+            historical=historical,
         )
 
     def _coverage(self, query: str, adjusted: list[tuple[float, int]], top_k: int) -> float:

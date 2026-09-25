@@ -29,7 +29,7 @@ class HybridAnswers:
         window = self._first_month_window(plan) or plan.window
         metrics = self._call(
             evidence,
-            "query_metrics",
+            "query_metrics", trace=trace,
             start=window[0],
             end=window[1],
             store_id=plan.store_id,
@@ -143,7 +143,7 @@ class HybridAnswers:
                 break
         check = self._call(
             evidence,
-            "unit_price_check",
+            "unit_price_check", trace=trace,
             product_id=plan.product_id,
             start=self.data_period["start"],
             end=self.data_period["end"],
@@ -197,7 +197,7 @@ class HybridAnswers:
         start, end = plan.window
         check = self._call(
             evidence,
-            "unit_price_check",
+            "unit_price_check", trace=trace,
             product_id=plan.product_id,
             start=start,
             end=end,
@@ -266,7 +266,7 @@ class HybridAnswers:
         start, end = plan.window
         metrics = self._call(
             evidence,
-            "query_metrics",
+            "query_metrics", trace=trace,
             start=start,
             end=end,
             store_id=plan.store_id,
@@ -274,8 +274,8 @@ class HybridAnswers:
         )
         scope = self._scope(plan)
         head = render.describe_metrics(metrics, scope, plan.metric)
-        head += self._zero_days(plan, evidence, start, end)
-        baseline = self._baseline(plan, evidence)
+        head += self._zero_days(plan, evidence, start, end, trace)
+        baseline = self._baseline(plan, evidence, trace)
         body, citations = self._cause_block(plan, start, end, trace)
         if not citations:
             return Answer(
@@ -331,13 +331,13 @@ class HybridAnswers:
             )
         return "", []
 
-    def _zero_days(self, plan: Plan, evidence: list[dict], start: str, end: str) -> str:
+    def _zero_days(self, plan: Plan, evidence: list[dict], start: str, end: str, trace=None) -> str:
         """区间不止一天时，指出里面到底是哪几天不对。"""
         if start == end:
             return ""
         daily = self._call(
             evidence,
-            "daily_metrics",
+            "daily_metrics", trace=trace,
             start=start,
             end=end,
             store_id=plan.store_id,
@@ -349,7 +349,7 @@ class HybridAnswers:
             return ""
         return "其中 %s 共 %d 天没有任何营业额。" % ("、".join(zero), len(zero))
 
-    def _baseline(self, plan: Plan, evidence: list[dict]) -> str:
+    def _baseline(self, plan: Plan, evidence: list[dict], trace=None) -> str:
         """给异常一个参照：同样长度的上一个区间。"""
         start, end = plan.window
         first, last = date.fromisoformat(start), date.fromisoformat(end)
@@ -359,7 +359,7 @@ class HybridAnswers:
             return ""
         result = self._call(
             evidence,
-            "query_metrics",
+            "query_metrics", trace=trace,
             start=previous[0],
             end=previous[1],
             store_id=plan.store_id,

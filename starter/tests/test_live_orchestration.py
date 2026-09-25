@@ -209,4 +209,8 @@ def test_wrong_scope_tool_result_not_used_as_evidence():
 
     assert answer.data_evidence == []
     assert answer.answer == "（兜底）"
-    assert any(step["step"] == "tool_scope_mismatch" for step in trace.steps)
+    # 被拒绝的工具调用要留下痕迹：status=rejected、accepted=False、带原因。
+    rejected = [item for item in trace.tools if item["status"] == "rejected"]
+    assert rejected, "查错区间的工具调用应记为 rejected"
+    assert rejected[0]["accepted"] is False
+    assert "不一致" in rejected[0]["reject_reason"]

@@ -51,6 +51,11 @@ class Settings:
         return PROJECT_DIR / ".cache" / "index.json"
 
     @property
+    def traces_dir(self) -> Path:
+        """trace 落盘目录：有界、脱敏，随 var/ 一起被 gitignore。"""
+        return self.var_dir / "traces"
+
+    @property
     def live(self) -> bool:
         """契约 §7.2：没有 Key 就进入 mock 降级模式，服务照常启动。"""
         return bool(self.llm_api_key and self.llm_base_url and self.llm_model)

@@ -32,7 +32,8 @@ class Service:
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self.settings = settings or load_settings()
         self.sessions = SessionStore()
-        self.traces = TraceStore()
+        # 有界 + 脱敏的持久化 trace：跨重启仍能按 ID 找回。
+        self.traces = TraceStore(directory=self.settings.traces_dir)
         self.rebuild(only_if_missing=True)
 
     # -- 启动与重建 -------------------------------------------------------------
@@ -139,6 +140,7 @@ class Service:
             question=question or "",
             session_id=session_id,
         )
+        trace.mode = self.settings.llm_mode
         answer = self._answer(trace, session_id, question or "")
         payload = {
             "answer": answer.answer,
@@ -146,6 +148,18 @@ class Service:
             "citations": answer.citations,
             "data_evidence": answer.data_evidence,
             "trace_id": trace.trace_id,
+        }
+        # 回答本身的摘要也进 trace，面板才能一眼看到「最终给了什么」。
+        trace.answer = {
+            "type": answer.answer_type,
+            "answer_preview": answer.answer[:600],
+            "answer_length": len(answer.answer),
+            "citations": [
+                {"doc_id": item.get("doc_id"), "quote_preview": (item.get("quote") or "")[:200]}
+                for item in answer.citations
+            ],
+            "evidence_count": len(answer.data_evidence),
+            "notes": answer.notes,
         }
         trace.step("response", {"answer_type": answer.answer_type, "notes": answer.notes})
         # 落盘前统一脱敏：无论错误信息从哪条路径来，trace 里都不出现 Key。

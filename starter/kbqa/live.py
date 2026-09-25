@@ -110,25 +110,66 @@ class LiveEngine:
                     # window / numeric 约束，复用 /api/retrieve 背后的同一套 retriever；
                     # 历史版本与生效日期由规划器决定，不靠模型猜。
                     result = self._search_kb(params, plan, trace, started)
-                else:
-                    result = self.run_tool(name, params)
-                    trace.step("tool", {"tool": name, "params": params}, started=started)
-                    scope_error = self._scope_error(plan, name, params)
-                    if scope_error:
-                        # 模型查了错误的时间/门店/商品：结果再真实也不能当证据。
-                        trace.step("tool_scope_mismatch", {"tool": name, "reason": scope_error})
-                        result = {"error": scope_error}
-                if name == "search_kb":
                     # 去指令化后才进模型上下文与归档：知识库里的指令句只是资料。
                     result = self._clean_kb_result(result, trace)
+                    trace.tool(
+                        tool="search_kb",
+                        params=params,
+                        status="ok",
+                        result=[
+                            {"doc_id": hit.get("doc_id"), "score": hit.get("score")}
+                            for hit in (result.get("results") or [])
+                        ],
+                        took_ms=(time.perf_counter() - started) * 1000,
+                        accepted=True,
+                        entered="citations",
+                        source="live",
+                    )
                     for hit in result.get("results") or []:
                         doc_id = hit.get("doc_id")
                         if doc_id:
                             retrieved_docs.setdefault(doc_id, []).append(hit)
-                elif "error" not in result:
-                    evidence.append(
-                        {"tool": name, "params": params, "result": fit_evidence(result)}
-                    )
+                else:
+                    result = self.run_tool(name, params)
+                    took_ms = (time.perf_counter() - started) * 1000
+                    scope_error = self._scope_error(plan, name, params)
+                    if scope_error:
+                        # 模型查了错误的时间/门店/商品：结果再真实也不能当证据。
+                        result = {"error": scope_error}
+                        trace.tool(
+                            tool=name,
+                            params=params,
+                            status="rejected",
+                            result=result,
+                            took_ms=took_ms,
+                            accepted=False,
+                            reject_reason=scope_error,
+                            source="live",
+                        )
+                    elif "error" in result:
+                        trace.tool(
+                            tool=name,
+                            params=params,
+                            status="error",
+                            result=result,
+                            took_ms=took_ms,
+                            accepted=False,
+                            reject_reason=str(result.get("error")),
+                            source="live",
+                        )
+                    else:
+                        fitted = fit_evidence(result)
+                        trace.tool(
+                            tool=name,
+                            params=params,
+                            status="ok",
+                            result=fitted,
+                            took_ms=took_ms,
+                            accepted=True,
+                            entered="data_evidence",
+                            source="live",
+                        )
+                        evidence.append({"tool": name, "params": params, "result": fitted})
                 messages.append(
                     {
                         "role": "tool",

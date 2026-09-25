@@ -48,13 +48,31 @@ class Answerer(HybridAnswers):
 
     # -- 基础设施 ---------------------------------------------------------------
 
-    def _call(self, evidence: list[dict], name: str, **params) -> dict:
+    def _call(self, evidence: list[dict], name: str, trace=None, **params) -> dict:
+        """执行一次数据库工具，并把**真实执行过程**记进 trace（第四关）。
+
+        mock 路径过去只在 trace 里留了规划与检索，工具调用没有步骤；这里补上：
+        工具名、最终参数、有界结果摘要、耗时、执行成功与否，以及是否进入最终证据。
+        """
+        started = time.perf_counter()
         result = getattr(self.tools, name)(**params)
         trimmed = result
         if name == "daily_metrics" and len(result.get("days", [])) > 31:
             trimmed = {"days": result["days"][:31], "days_total": len(result["days"])}
         # 契约硬上限：单条 data_evidence.result 序列化后不超过 4096 字节。
-        evidence.append({"tool": name, "params": params, "result": fit_evidence(trimmed)})
+        fitted = fit_evidence(trimmed)
+        evidence.append({"tool": name, "params": params, "result": fitted})
+        if trace is not None:
+            trace.tool(
+                tool=name,
+                params=params,
+                status="ok",
+                result=fitted,
+                took_ms=(time.perf_counter() - started) * 1000,
+                accepted=True,
+                entered="data_evidence",
+                source="answerer",
+            )
         return result
 
     def _scope(self, plan: Plan, window=None) -> str:
@@ -228,7 +246,7 @@ class Answerer(HybridAnswers):
         evidence: list[dict] = []
         result = self._call(
             evidence,
-            "query_metrics",
+            "query_metrics", trace=trace,
             start=plan.window[0],
             end=plan.window[1],
             store_id=plan.store_id,
@@ -255,7 +273,7 @@ class Answerer(HybridAnswers):
             first, second = plan.window, plan.compare_window
             result = self._call(
                 evidence,
-                "compare_periods",
+                "compare_periods", trace=trace,
                 start_a=first[0],
                 end_a=first[1],
                 start_b=second[0],
@@ -267,26 +285,26 @@ class Answerer(HybridAnswers):
                 result, plan.metric, self._scope(plan, first), self._scope(plan, second)
             )
         elif plan.kind == "payment":
-            result = self._call(evidence, "payment_mix", start=start, end=end, store_id=plan.store_id)
+            result = self._call(evidence, "payment_mix", trace=trace, start=start, end=end, store_id=plan.store_id)
             focus = next(
                 (name for name in result.get("payments", {}) if name in plan.standalone), ""
             )
             text = render.describe_payment(result, scope, focus)
         elif plan.kind == "top_products":
             result = self._call(
-                evidence, "top_products", start=start, end=end, store_id=plan.store_id, limit=10
+                evidence, "top_products", trace=trace, start=start, end=end, store_id=plan.store_id, limit=10
             )
             text = render.describe_top(result, scope)
         elif plan.kind == "by_store":
-            result = self._call(evidence, "by_store", start=start, end=end, product_id=plan.product_id)
+            result = self._call(evidence, "by_store", trace=trace, start=start, end=end, product_id=plan.product_id)
             text = render.describe_by_store(result, scope)
         elif plan.kind == "category":
-            result = self._call(evidence, "by_store_category", start=start, end=end)
+            result = self._call(evidence, "by_store_category", trace=trace, start=start, end=end)
             text = render.describe_category(result, scope)
         elif plan.kind == "daily":
             result = self._call(
                 evidence,
-                "daily_metrics",
+                "daily_metrics", trace=trace,
                 start=start,
                 end=end,
                 store_id=plan.store_id,
@@ -296,7 +314,7 @@ class Answerer(HybridAnswers):
         else:
             result = self._call(
                 evidence,
-                "query_metrics",
+                "query_metrics", trace=trace,
                 start=start,
                 end=end,
                 store_id=plan.store_id,
