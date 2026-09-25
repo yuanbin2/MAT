@@ -84,3 +84,93 @@ export interface HealthInfo {
   data_period: { start: string | null; end: string | null }
   [key: string]: unknown
 }
+
+// ---- 调试 trace（第四关）----
+
+export interface TraceHit {
+  doc_id: string
+  chunk_id: string
+  score: number
+  padded: boolean
+  kind?: string
+  preview?: string
+}
+
+export interface TraceRetrieval {
+  query: string
+  expansions?: string[]
+  coverage?: number
+  as_of?: string | null
+  store_id?: string | null
+  year?: number | null
+  window?: string[] | null
+  historical?: boolean | null
+  hits: TraceHit[]
+  filtered?: { doc_id: string; reason: string }[]
+}
+
+export interface TraceTool {
+  tool: string
+  params?: Record<string, unknown>
+  status: 'ok' | 'error' | 'rejected' | string
+  took_ms: number | null
+  accepted: boolean
+  entered?: string
+  reject_reason?: string
+  result_bytes?: number
+  result_preview?: string
+  source?: string
+}
+
+export interface TraceStep {
+  step: string
+  at_ms: number
+  took_ms: number | null
+  detail?: unknown
+}
+
+export interface TraceError {
+  where: string
+  type: string
+  message: string
+  traceback?: string
+}
+
+export interface TraceLlmCall {
+  endpoint?: string
+  model?: string
+  status?: number
+  error?: string
+  detail?: string
+  finish_reason?: string
+  took_ms?: number
+  request?: string
+  response?: string
+  raw_content?: string
+  raw_reasoning?: string
+  usage?: unknown
+}
+
+export interface TracePayload {
+  trace_id: string
+  session_id: string | null
+  question: string
+  mode: string
+  started_at: string
+  total_ms: number
+  plan: Record<string, unknown>
+  retrievals: TraceRetrieval[]
+  tools: TraceTool[]
+  answer: {
+    type?: string
+    answer_preview?: string
+    answer_length?: number
+    citations?: { doc_id: string; quote_preview: string }[]
+    evidence_count?: number
+    notes?: string[]
+  }
+  model_called: boolean
+  llm_calls: TraceLlmCall[]
+  steps: TraceStep[]
+  errors: TraceError[]
+}

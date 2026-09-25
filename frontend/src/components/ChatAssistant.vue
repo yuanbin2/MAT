@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { fetchChat, fetchHealth } from '../api'
 import type { AnswerType, Citation, DataEvidence, HealthInfo } from '../types'
+import TracePanel from './TracePanel.vue'
 
 type MsgState = 'ok' | 'loading' | 'error'
 
@@ -13,6 +14,7 @@ interface Message {
   answerType?: AnswerType
   citations: Citation[]
   evidence: DataEvidence[]
+  traceId?: string
   state: MsgState
   error?: string
 }
@@ -39,6 +41,20 @@ const sessionId = ref('')
 const mode = ref<'live' | 'mock' | 'unknown'>('unknown')
 const healthError = ref('')
 const expanded = ref<Record<string, boolean>>({})
+
+// 调试面板
+const debugOpen = ref(false)
+const debugTraceId = ref('')
+
+function openTrace(traceId: string) {
+  debugTraceId.value = traceId
+  debugOpen.value = true
+}
+
+function openDebugLookup() {
+  debugTraceId.value = ''
+  debugOpen.value = true
+}
 
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 
@@ -101,6 +117,7 @@ async function send(questionOverride?: string) {
     assistantMsg.answerType = resp.answer_type
     assistantMsg.citations = resp.citations ?? []
     assistantMsg.evidence = resp.data_evidence ?? []
+    assistantMsg.traceId = resp.trace_id
     assistantMsg.state = 'ok'
   } catch (e) {
     assistantMsg.state = 'error'
@@ -186,10 +203,13 @@ onMounted(() => {
           基于数据库实绩与公司知识库作答，回答附数据依据与文档来源；对话范围不受看板筛选影响。
         </div>
       </div>
-      <div class="chat__mode" :class="`chat__mode--${mode}`">
-        <template v-if="mode === 'live'">已接入大模型 · 在线</template>
-        <template v-else-if="mode === 'mock'">本地演示 · 降级模式（未配置模型 Key）</template>
-        <template v-else>{{ healthError || '服务状态未知' }}</template>
+      <div class="chat__mode-wrap">
+        <button class="chat__debug-entry" @click="openDebugLookup">调试记录</button>
+        <div class="chat__mode" :class="`chat__mode--${mode}`">
+          <template v-if="mode === 'live'">已接入大模型 · 在线</template>
+          <template v-else-if="mode === 'mock'">本地演示 · 降级模式（未配置模型 Key）</template>
+          <template v-else>{{ healthError || '服务状态未知' }}</template>
+        </div>
       </div>
     </div>
 
@@ -225,6 +245,9 @@ onMounted(() => {
                 <span class="chat__badge" :class="`chat__badge--${msg.answerType}`">
                   {{ ANSWER_LABELS[msg.answerType] }}
                 </span>
+                <button v-if="msg.traceId" class="chat__trace-link" @click="openTrace(msg.traceId)">
+                  查看调试记录
+                </button>
               </div>
 
               <div
@@ -300,6 +323,8 @@ onMounted(() => {
         <button class="chat__send" :disabled="!canSend" @click="send()">发送</button>
       </div>
     </div>
+
+    <TracePanel :open="debugOpen" :trace-id="debugTraceId" @close="debugOpen = false" />
   </div>
 </template>
 
@@ -331,6 +356,36 @@ onMounted(() => {
   color: var(--c-text-secondary);
 }
 
+.chat__mode-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.chat__debug-entry {
+  font-size: 12px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--c-text-secondary);
+  cursor: pointer;
+}
+.chat__debug-entry:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary);
+}
+.chat__trace-link {
+  margin-left: 10px;
+  border: none;
+  background: none;
+  color: var(--c-primary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
 .chat__mode {
   flex-shrink: 0;
   font-size: 12px;

@@ -6,6 +6,7 @@ import type {
   MetricsSummary,
   Store,
   TopProduct,
+  TracePayload,
 } from './types'
 
 const BASE = ''
@@ -91,4 +92,27 @@ export function fetchHealth(): Promise<HealthInfo> {
 
 export function fetchChat(sessionId: string, question: string): Promise<ChatResponse> {
   return postJson('/api/chat', { session_id: sessionId, question })
+}
+
+export class TraceNotFoundError extends Error {
+  status = 404
+  constructor() {
+    super('记录不存在或已过期')
+  }
+}
+
+export async function fetchTrace(traceId: string): Promise<TracePayload> {
+  const resp = await fetch(`${BASE}/api/trace/${encodeURIComponent(traceId)}`)
+  if (resp.status === 404) throw new TraceNotFoundError()
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`
+    try {
+      const body = await resp.json()
+      if (body && body.error) detail = body.error
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail)
+  }
+  return (await resp.json()) as TracePayload
 }
