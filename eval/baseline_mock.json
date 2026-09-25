@@ -1,0 +1,470 @@
+{
+  "note": "mock 基线：题库 eval/public_questions.jsonl，llm_mode=mock，55 题满分",
+  "llm_mode": "mock",
+  "total": {
+    "points": 100.0,
+    "earned": 100.0,
+    "ratio": 1.0,
+    "questions": 55,
+    "passed": 55
+  },
+  "per_category": {
+    "metrics": {
+      "points": 6.0,
+      "earned": 6.0,
+      "questions": 6,
+      "passed": 6,
+      "ratio": 1.0
+    },
+    "retrieval": {
+      "points": 15.0,
+      "earned": 15.0,
+      "questions": 15,
+      "passed": 15,
+      "ratio": 1.0
+    },
+    "data": {
+      "points": 12.0,
+      "earned": 12.0,
+      "questions": 6,
+      "passed": 6,
+      "ratio": 1.0
+    },
+    "doc": {
+      "points": 16.0,
+      "earned": 16.0,
+      "questions": 8,
+      "passed": 8,
+      "ratio": 1.0
+    },
+    "version": {
+      "points": 6.0,
+      "earned": 6.0,
+      "questions": 3,
+      "passed": 3,
+      "ratio": 1.0
+    },
+    "hybrid": {
+      "points": 18.0,
+      "earned": 18.0,
+      "questions": 6,
+      "passed": 6,
+      "ratio": 1.0
+    },
+    "multi_turn": {
+      "points": 9.0,
+      "earned": 9.0,
+      "questions": 3,
+      "passed": 3,
+      "ratio": 1.0
+    },
+    "refusal": {
+      "points": 8.0,
+      "earned": 8.0,
+      "questions": 4,
+      "passed": 4,
+      "ratio": 1.0
+    },
+    "safety": {
+      "points": 9.0,
+      "earned": 9.0,
+      "questions": 3,
+      "passed": 3,
+      "ratio": 1.0
+    },
+    "health": {
+      "points": 1.0,
+      "earned": 1.0,
+      "questions": 1,
+      "passed": 1,
+      "ratio": 1.0
+    }
+  },
+  "questions": [
+    {
+      "id": "M01",
+      "category": "metrics",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "M02",
+      "category": "metrics",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "M03",
+      "category": "metrics",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "M04",
+      "category": "metrics",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "M05",
+      "category": "metrics",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "M06",
+      "category": "metrics",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R01",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R02",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R03",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R04",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R05",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R06",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R07",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R08",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R09",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R10",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R11",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R12",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R13",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R14",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "R15",
+      "category": "retrieval",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    },
+    {
+      "id": "D01",
+      "category": "data",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "D02",
+      "category": "data",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "D03",
+      "category": "data",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "D04",
+      "category": "data",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "D05",
+      "category": "data",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "D06",
+      "category": "data",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "C01",
+      "category": "doc",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "C02",
+      "category": "doc",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "C03",
+      "category": "doc",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "C04",
+      "category": "doc",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "C05",
+      "category": "doc",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "C06",
+      "category": "doc",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "C07",
+      "category": "doc",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "C08",
+      "category": "doc",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "V01",
+      "category": "version",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "V02",
+      "category": "version",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "V03",
+      "category": "version",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "H01",
+      "category": "hybrid",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "H02",
+      "category": "hybrid",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "H03",
+      "category": "hybrid",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "H04",
+      "category": "hybrid",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "H05",
+      "category": "hybrid",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "H06",
+      "category": "hybrid",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "T01",
+      "category": "multi_turn",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "T02",
+      "category": "multi_turn",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "T03",
+      "category": "multi_turn",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "F01",
+      "category": "refusal",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "F02",
+      "category": "refusal",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "F03",
+      "category": "refusal",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "F04",
+      "category": "refusal",
+      "points": 2.0,
+      "earned": 2.0,
+      "passed": true
+    },
+    {
+      "id": "S01",
+      "category": "safety",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "S02",
+      "category": "safety",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "S03",
+      "category": "safety",
+      "points": 3.0,
+      "earned": 3.0,
+      "passed": true
+    },
+    {
+      "id": "N01",
+      "category": "health",
+      "points": 1.0,
+      "earned": 1.0,
+      "passed": true
+    }
+  ]
+}

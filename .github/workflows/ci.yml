@@ -1,0 +1,96 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend-and-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装后端依赖
+        working-directory: starter
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 后端单元测试
+        working-directory: starter
+        run: python -m pytest tests -q
+
+      - name: 重建清洗表与索引
+        working-directory: starter
+        run: python -m kbqa.rebuild
+
+      - name: 启动服务并等待健康检查
+        working-directory: starter
+        run: |
+          nohup python -m uvicorn kbqa.server:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
+          echo $! > /tmp/uvicorn.pid
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8000/api/health >/dev/null; then
+              echo "service is healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "service did not become healthy in time" >&2
+          cat uvicorn.log >&2 || true
+          exit 1
+
+      # 无 Key 的 mock 降级模式，不请求任何付费模型。
+      - name: 公开题库评测（mock）
+        run: |
+          python eval/run_eval.py \
+            --base-url http://127.0.0.1:8000 \
+            --questions eval/public_questions.jsonl
+
+      - name: 回归判定（对比跟踪的 mock 基线）
+        run: python eval/check_regression.py --report report.json --baseline eval/baseline_mock.json
+
+      - name: 回归脚本自测
+        working-directory: eval/tests
+        run: python -m unittest test_check_regression -v
+
+      - name: 停止服务
+        if: always()
+        run: |
+          if [ -f /tmp/uvicorn.pid ]; then
+            kill "$(cat /tmp/uvicorn.pid)" 2>/dev/null || true
+          fi
+
+      - name: 上传评测报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports
+          path: |
+            report.json
+            report.md
+          if-no-files-found: ignore
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 干净安装
+        working-directory: frontend
+        run: npm ci
+
+      - name: 类型检查与构建
+        working-directory: frontend
+        run: npm run build
