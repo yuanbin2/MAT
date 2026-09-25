@@ -39,8 +39,19 @@ cp .env.example .env        # 然后把三个值填进去
 
 - 查找顺序：仓库根 `.env` → `starter/.env`（后者可覆盖前者同名键）；也可用 `ENV_FILE=/path/a.env` 指定，
   多文件用系统路径分隔符（Windows `;`、Linux `:`）连接。
-- 关掉 `.env` 起服务：`ENV_FILE= python -m uvicorn kbqa.server:app --port 8000`（等价 `make run-mock`）。
+- 想强制走降级模式：`make run-mock`（等价 `ENV_FILE= LLM_BASE_URL= LLM_API_KEY= LLM_MODEL= python -m uvicorn kbqa.server:app --port 8000`）。
+  注意它**同时清空三件套**——只清 `ENV_FILE` 是不够的：机器上若已设了 `LLM_*`，服务照样是 live。
+- 排查"我配了 Key 为什么还是 mock"：`make env-mode`（等价 `python -m kbqa.envcheck`）会打印
+  推导出的模式、读到了哪几个 `.env`、Key 有没有值；`.env` 在但一行有效赋值都没有时会给出 warning。
 - 仓库里只提交 `.env.example`（占位值）。有测试守着这条：`.env` 必须被忽略、`.env.example` 必须可入库。
+
+> ⚠️ **一处 Make 的坑（已修，有回归测试）**：`export FOO` 在 `FOO` 未定义时会把 `FOO` 导出成**空串**。
+> 空串在这里是有语义的——`ENV_FILE=` 等于"不读 .env"，`LLM_API_KEY=` 会盖掉 `.env`。
+> 所以 `starter/Makefile` 改成只在"外部真的设过"（`origin` 是 environment/command line）时才导出，
+> 并用目标级 `export … := ` 实现 `run-mock` 的清空。`starter/tests/test_makefile_env.py` 用**真实 make 命令**
+> 钉住这四条：有效 `.env` → `make run` 是 live、完全没配置 → mock、系统有三件套时 `run-mock` 仍 mock、
+> 外部设了 `ENV_FILE` 要原样传下去。
+
 
 ## 3. 无 Key 降级（mock）模式
 

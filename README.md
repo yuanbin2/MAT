@@ -35,6 +35,8 @@ make rebuild              # 从 ../data 与 ../knowledge_base 重建
 
 ```bash
 make run                  # 后端：http://localhost:8000（API 文档 /docs）
+make run-mock             # 同上，但强制本地降级模式：不读 .env，也不认系统里的三件套
+make env-mode             # 只打印当前配置会走 live 还是 mock（排查"配了 Key 为什么还是 mock"）
 ```
 
 另开一个终端：
@@ -51,6 +53,8 @@ npm run dev               # 前端：http://localhost:5173，/api 自动代理�
 > `.venv\Scripts\pip install -r requirements.txt` →
 > `.venv\Scripts\python -m kbqa.rebuild` →
 > `.venv\Scripts\python -m uvicorn kbqa.server:app --port 8000`。
+> 想直接用上面的 `make` 命令，装一个 GNU Make 即可（Linux/macOS 一般自带；CI 也用 make）；
+> 装了便携版可以用 `MAKE_BIN=/path/to/make` 指定给测试。
 >
 > 后端不在 8000 端口时，用 `VITE_API_TARGET=http://127.0.0.1:8001 npm run dev`
 > 指定代理目标。
