@@ -190,6 +190,9 @@
 - 前端 `npm run build` → 通过（vue-tsc 类型检查 + vite 构建）。
 - 回归脚本自测 `cd eval/tests && python -m unittest test_check_regression -v` → **10 passed**。
 
+> 这两个数字是**第四关当时**的状态，已被后面的验收修复轮推进：后端现为 **205 passed**、
+> 回归脚本自测 **15 passed**。最新数字见下一节。
+
 ### 3. 自拟题（公开题未充分覆盖的风险）
 
 ```bash
@@ -212,6 +215,32 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py
   → `/api/chat` 引用 KB-099 → `/api/trace` 里能看到新命中。全程在临时副本，不碰正式知识库与索引缓存。
 - 另在 `tests/test_kb_drill.py` 里做等价断言（新增文档后检索/问答/引用/trace 跟着变；
   替换数据后 metrics 取自新数据、口径仍 18290）。
+
+## 第四关验收问题修复（本轮）
+
+按优先级修的四个问题：Make 空值导出、演练索引隔离、trace 采纳语义、现场操作。
+全部按"先拿红证、再改实现、后跑回归"的顺序做，逐条见 `DEBUG_LOG.md` 分层 9。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 后端全量测试 | `pytest tests -q`（`MAKE_BIN=<便携版 make>`） | **205 passed** |
+| 其中 Makefile 环境语义 | `pytest tests/test_makefile_env.py -q` | **6 passed**（**走真实 make 命令**，含两个真起服务的用例） |
+| 其中 trace 采纳语义 | `pytest tests/test_trace_acceptance.py -q` | **9 passed** |
+| 其中演练隔离 | `pytest tests/test_kb_drill.py -q` | **5 passed**（真跑一遍 drill 脚本再从外部核对） |
+| 公开题库（mock，全量） | `run_eval.py --base-url http://127.0.0.1:8003 --questions eval/public_questions.jsonl` | **100.00 / 100.00**（55/55） |
+| 回归门禁（全量严格） | `check_regression.py --report report.json` | 无回归，**退出码 0** |
+| 回归门禁（局部） | `run_eval.py --only doc` → `check_regression.py --subset` | 局部 8 题通过、退出码 0，并打印"总分与分类分未比较" |
+| 同一局部报告不加 `--subset` | `check_regression.py --report report.json` | 报 57 处假回归（总分 -84、缺题…），退出码 1 —— 说明为什么必须分开 |
+| 自拟题 | `run_eval.py --questions eval/extra_questions.jsonl` | **25.00 / 25.00**（13 题全绿） |
+| 新增文档演练 | `drill_new_doc.py` | **13 / 13 PASS**（kb_docs 相对 +1、索引键变化、检索/回答/引用/trace 命中、**跟踪索引 sha256 不变**） |
+| 回归脚本自测 | `cd eval/tests && python -m unittest test_check_regression -v` | **15 passed** |
+| 前端 | `npm ci` + `npm run build` | 通过（vue-tsc + vite） |
+
+**Mock 成绩没有回退**：仍是无 Key 降级模式下的 55/55、100/100。
+
+> 本机原本没装 make。为了按要求"用实际 Make 命令验证"，下载了 GNU Make 4.4.1 便携版
+> （放在项目外的 `.tools/make/`，不入库），测试用 `MAKE_BIN=` 指过去；
+> **CI 的 ubuntu runner 自带 make**，不设置也会跑这些用例。
 
 ## 关于 live 模式：三种状态分开报告
 

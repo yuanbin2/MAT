@@ -494,6 +494,81 @@
 
 ---
 
+## 分层 9：第四关验收问题修复
+
+### D30 `Makefile` 把未设置的 `ENV_FILE`/`LLM_*` 导出成空串，反而阻断了 `.env`
+
+- **现象**：仓库根放着 4 行有效配置的 `.env`，`make run` 起来却是 `llm_mode=mock`。
+- **验证（两步，都有输出）**：
+  1. 最小 Makefile：`export ENV_FILE LLM_API_KEY` + 系统未设这两个变量 →
+     子进程读到 `ENV_FILE='' LLM_API_KEY=''`。**Make 会把未定义的变量导出成空串**；
+     改成 `ifneq ($(filter environment command line,$(origin ENV_FILE)),)` 后变成 `ENV_FILE=None`，
+     而外部真设了 `ENV_FILE` 时仍能正确传下去。
+  2. 真实项目：`grep -c '^LLM_' .env` = 4（配置有效），`make run PORT=8099` → `llm_mode=mock`。
+- **根因**：空串在这里**是有语义的**——`ENV_FILE=`（空串/`off`/`none`/`0`）表示"一个 .env 都不读"，
+  `LLM_API_KEY=` 空会盖掉 `.env` 里的值。上一轮我把 `ENV_FILE` 加进 `export` 列表时引入了这个回归。
+- **修复**：`starter/Makefile` 四个变量各自按 `origin` 判断后再导出；`run-mock` 改用目标级
+  `export … := ` 把这四个变量对本目标清空（只清 `ENV_FILE` 不够：机器上若已设 `LLM_*`，服务照样是 live）。
+  另加 `env-mode` / `env-mode-mock` 两个诊断目标 + `kbqa/envcheck.py`（打印模式、读到了哪几个 `.env`、
+  Key 有无值——**不打印 Key**；`.env` 在但一行有效赋值都没有时给 warning）。
+- **回归测试**：`starter/tests/test_makefile_env.py` 6 例，全部走**真实 make 命令**：
+  有效 `.env` → `make run` 为 live；完全没配置 → mock；系统已有三件套 → `run-mock` 仍 mock；
+  外部设了 `ENV_FILE` 要原样传下去；其中两例真的起服务并轮询 `/api/health`。
+  把 Makefile 改回旧写法跑一遍 → **3 例失败**，确认能抓住回归。
+
+### D31 演练用临时知识库重建，把索引写进了仓库跟踪的 `.cache/index.json`
+
+- **现象**：`eval/drill_new_doc.py` 会把知识库复制到临时目录再 `kbqa.rebuild`，但索引路径
+  写死为 `starter/.cache/index.json`——临时知识库（多一篇文档）的索引会**覆盖仓库里跟踪的那份**，
+  于是提交上去的索引与真实 `knowledge_base/` 对不上。
+- **核对当前状态**（先证实、再动手）：真实 KB 算出的内容键 `b0da151dbd8b…` 与仓库里索引记录的键
+  **一致**（35 篇、无 KB-099），HEAD 版本也一致。也就是说此刻是好的，但机制上随时会被演练破坏。
+- **修复**：
+  - `config.Settings.index_path` 支持 `INDEX_PATH` 重定向；演练把索引指到临时目录
+  - 演练的文档编号自适应：扫描知识库里已用编号后挑一个空的（写死 KB-099 时，源库本来就有
+    KB-099 的话文件数不会 +1，断言会莫名失败）；`notices/` 不存在则创建
+  - `kb_docs` 断言由写死的 35/36 改为"比基础值多一"
+  - 演练新增第 8 项自检：前后 `starter/.cache/index.json` 的 sha256 必须一致（`finally` 里再兜一次）
+- **回归测试**：`test_tracked_index_matches_real_knowledge_base`（跟踪索引的内容键与文档数必须等于
+  真实知识库算出来的）、`test_index_path_can_be_redirected`、
+  `test_drill_script_leaves_worktree_and_tracked_index_untouched`（真跑一遍演练脚本，
+  再从外部断言索引字节一致 + `git status` 无变化）。
+- **验证**：把索引的 `key` 改成演练版假值后守门测试立刻失败并打印两个键的差异；还原后 `git status` 干净。
+  演练 13/13 通过，期间索引 sha256 稳定在 `79ea5cf1bc24a786`。
+
+### D32 trace 在检索完成时就标 `accepted=True, entered="citations"`
+
+- **现象**：`search_kb` 一执行完就写 accepted/entered。可"检索执行成功""返回了候选片段"
+  "最终真的被引用"是**三件不同的事**——零命中、命中但回答没引用、模型失败回退时，
+  面板都会显示成"已采纳/已引用"，与实际返回对不上。数据库工具同理："查到真实数字"≠"数字进了最终回答"。
+- **修复**：`Trace.tool()` 新增 `pending` 语义（先记 `accepted=False` + 原因"待回答定稿后核对"，
+  并私下带上按对象身份核对的句柄）；新增 `Trace.reconcile(evidence, citations)` 在回答定稿后
+  只依据**最终返回给调用方**的那两份东西回填；已在调用点定论的条目（范围不符 / 工具报错）不被覆盖；
+  `as_dict()` 剔除 `_` 开头的私有字段。`service.chat()` 在落盘前调用 reconcile——
+  **失败路径也走这里**，所以模型超时/回退时本轮所有工具结果都会被正确标成未采纳并给出原因。
+- **回归测试**：`tests/test_trace_acceptance.py` 9 例（零命中后拒答 / 命中但没引用 / 命中且被引用 /
+  定稿前不得声称已采纳 / 数据工具进了最终证据才算采纳 / 数字无依据回退 / 服务级模型超时 /
+  私有字段不外泄）。把 `live.py` 改回旧写法 → **4 例失败**。
+
+### D33 调试面板会串台，且看不到 chunk_id、过滤原因只看得到前 4 条
+
+- **现象**：换 trace ID 时旧内容不会立刻清掉，空查询也一样；连续快速切换时先发的请求可能后回来，
+  把新结果覆盖掉。检索表只有 doc_id/分数/片段，没有 chunk_id；过滤原因硬编码 `.slice(0, 4)`，
+  排查"这篇为什么被挡掉"时看不到全部。
+- **修复**：
+  - `load()` 先无条件清空（空 ID 也清，不再把上一条留在屏幕上），并用请求序号丢弃过期响应
+  - 检索表加 `chunk_id` 列，补位/表格片段带标识
+  - 过滤原因默认前 4 条 + 「被过滤 N 篇（展开全部/收起）」
+  - 采纳标记补第三种状态「待回答定稿后核对」（配合 D32）
+- **回归测试**：面板实拍（`docs/screenshots/debug-panel.png`）确认 chunk_id 列与 14 条过滤原因全展开。
+- **顺带修文档语义**：DEBUGGING.md 原先把 `--only doc` 与 `check_regression` 写在一起，
+  照着做会拿**局部报告**跟**全量基线**比，刷出一堆"缺题"假回归。现在分成
+  「① 快速定位（`--only`）」与「② 最终判定（全量）」；并给判定脚本加了 `--subset`：
+  只比新报告里出现过的题目、明确声明总分与分类分未比较、基线里没有的题号直接报错。
+  实测同一份 `--only doc` 报告：加 `--subset` → 通过（8 题）；不加 → **57 处假回归、退出码 1**。
+
+---
+
 ## 尚未解决 / 已知边界
 
 - 无 Key 的 mock 降级模式公开题库满分；**评审配置（DeepSeek）的真实 live 未验证**，

@@ -63,10 +63,10 @@ npm run dev               # 前端：http://localhost:5173，/api 自动代理�
 
 ```bash
 cd starter
-make test                 # 后端测试（187 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
+make test                 # 后端测试（205 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
                           # 只读 SQL 闸门、SQLite 内部对象、业务表白名单、有界读取、证据体积、
-                          # live 数字取证、search_kb 继承 Plan、trace 记录与持久化、
-                          # loader doc_id、.env 读取、新增文档/换数据演练等
+                          # live 数字取证、search_kb 继承 Plan、trace 记录/持久化/采纳语义、
+                          # loader doc_id、.env 读取与 Make 语义、新增文档与换数据演练等
 ```
 
 > `run_sql` 只接受单条只读查询（`SELECT`/`WITH … FROM`），拒绝 `sqlite_master`/`sqlite_schema`/
