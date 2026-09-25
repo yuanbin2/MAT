@@ -110,6 +110,84 @@ class TestCompare(unittest.TestCase):
         self.assertEqual(cr.compare(low, high), [])
 
 
+class TestSubsetCompare(unittest.TestCase):
+    """只跑了一部分题（--only <类别>）时的局部比较。
+
+    直接拿局部报告跟全量基线比会刷出一堆"缺题"，那是假回归；`subset=True` 只比
+    新报告里出现过的题目，并且**不比较总分与分类分**（局部跑分不可比）。
+    """
+
+    def setUp(self) -> None:
+        self.category_of = {"R01": "retrieval", "C01": "doc", "T01": "multi_turn"}
+        self.baseline = make_report({"R01": 2.0, "C01": 2.0, "T01": 2.0}, self.category_of)
+
+    def test_subset_of_baseline_passes(self):
+        partial = make_report({"C01": 2.0}, self.category_of)
+        self.assertEqual(cr.compare(self.baseline, partial, subset=True), [])
+
+    def test_subset_still_catches_regression(self):
+        partial = make_report({"C01": 0.0}, self.category_of)
+        problems = cr.compare(self.baseline, partial, subset=True)
+        self.assertEqual([item["kind"] for item in problems], ["question"])
+        self.assertEqual(problems[0]["id"], "C01")
+
+    def test_subset_does_not_report_missing_questions(self):
+        """局部报告的"缺题"不是回归——这正是不得不区分的原因。"""
+        partial = make_report({"C01": 2.0}, self.category_of)
+        problems = cr.compare(self.baseline, partial, subset=True)
+        self.assertFalse([item for item in problems if item["kind"] == "missing"])
+        # 同一条局部报告走全量比较就会刷出缺题与总分假回归
+        strict = cr.compare(self.baseline, partial)
+        self.assertTrue([item for item in strict if item["kind"] == "missing"])
+        self.assertTrue([item for item in strict if item["kind"] == "total"])
+
+    def test_subset_rejects_question_absent_from_baseline(self):
+        partial = make_report({"C01": 2.0, "ZZ9": 2.0}, {
+            "C01": "doc", "ZZ9": "doc",
+        })
+        problems = cr.compare(self.baseline, partial, subset=True)
+        self.assertEqual([item["kind"] for item in problems], ["unknown"])
+        self.assertEqual(problems[0]["id"], "ZZ9")
+
+
+class TestSubsetCli(unittest.TestCase):
+    def _write(self, path: Path, payload: dict) -> None:
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    def test_subset_flag_and_banner(self):
+        category_of = {"R01": "retrieval", "C01": "doc"}
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            baseline = tmp_path / "baseline.json"
+            report = tmp_path / "report.json"
+            self._write(baseline, make_report({"R01": 2.0, "C01": 2.0}, category_of))
+            self._write(report, make_report({"C01": 2.0}, category_of))
+
+            strict = subprocess.run(
+                [sys.executable, str(SCRIPT), "--report", str(report), "--baseline", str(baseline)],
+                capture_output=True,
+                text=True,
+            )
+            subset = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--report",
+                    str(report),
+                    "--baseline",
+                    str(baseline),
+                    "--subset",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(strict.returncode, cr.EXIT_REGRESSION, strict.stdout)
+        self.assertEqual(subset.returncode, cr.EXIT_OK, subset.stdout)
+        self.assertIn("局部比较", subset.stdout)
+        self.assertIn("总分与分类分未比较", subset.stdout)
+
+
 class TestLoadReport(unittest.TestCase):
     def test_missing_report(self):
         report, problems = cr.load_report(Path("/definitely/not/here.json"))

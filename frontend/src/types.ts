@@ -115,6 +115,8 @@ export interface TraceTool {
   status: 'ok' | 'error' | 'rejected' | string
   took_ms: number | null
   accepted: boolean
+  /** 采纳状态待回答定稿后核对（正常收尾后不会再出现）。 */
+  pending?: boolean
   entered?: string
   reject_reason?: string
   result_bytes?: number

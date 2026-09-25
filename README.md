@@ -100,7 +100,14 @@ python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/publi
 ```bash
 python eval/run_eval.py --base-url http://localhost:8000 --questions eval/public_questions.jsonl
 python eval/check_regression.py --report report.json      # 退步/漏题/坏报告 → 非零退出
+
+# 调试时只跑了部分类别（--only doc）：那是"快速定位"，不是判定。
+# 局部报告不能直接跟全量基线比（总分/分类分不可比，会刷出"缺题"假回归），要加 --subset：
+python eval/check_regression.py --report report.json --subset
 ```
+
+`--subset` 只比新报告里出现过的题目，并明确打印"总分与分类分未比较"；基线里没有的题号直接报错。
+不加参数就是全量严格比较。**定稿/提交前必须跑完整题库的那一次。**
 
 输出版式：`[逐题] C01（doc）失败检查 citations；trace_id=t-20260901-0007`。
 `.github/workflows/ci.yml` 已经串起来：后端 pytest → rebuild → 起服务等健康检查 → 公开题库评测 →

@@ -10,6 +10,10 @@
 
 只比较业务结果，不比较生成时间、机器上的绝对路径或端口。
 基线用 `--update` 从一份当前报告生成，提交时注明 commit、题库与 llm_mode=mock。
+
+调试时如果只跑了部分题目（`run_eval.py --only <类别>`），**不能**直接跟全量基线比——
+总分与分类分都不可比，只会刷出一堆"缺题"。这种情况用 `--subset`：
+它只比新报告里出现过的题目，并明确声明总分/分类分未比较。默认不加参数仍是全量严格比较。
 """
 
 from __future__ import annotations
@@ -87,35 +91,44 @@ def _trace_id(question: dict) -> str | None:
     return None
 
 
-def compare(baseline: dict, current: dict) -> list[dict]:
-    """返回问题列表；空列表表示没有退步。"""
+def compare(baseline: dict, current: dict, *, subset: bool = False) -> list[dict]:
+    """返回问题列表；空列表表示没有退步。
+
+    ``subset=True`` 是给"只跑了一部分题"用的局部比较（例如调试时 `run_eval.py --only doc`）：
+    只比对**新报告里出现过**的题目。总分与分类分不比较——局部跑出来的总分没有可比性，
+    拿它跟全量基线比只会得到一堆假回归。
+
+    局部比较的覆盖面天然变小，所以必须显式加参数；不加就是原来的全量严格比较
+    （基线里有题而新报告没有 → 直接判"缺题"，防止靠删题让 CI 变绿）。
+    """
     problems: list[dict] = []
 
-    b_total = _earned(baseline.get("total"), None)  # type: ignore[arg-type]
-    c_total = _earned(current.get("total"))
-    if b_total is not None and c_total + EPS < b_total:
-        problems.append(
-            {"kind": "total", "detail": "总分 %s -> %s" % (b_total, c_total)}
-        )
+    if not subset:
+        b_total = _earned(baseline.get("total"), None)  # type: ignore[arg-type]
+        c_total = _earned(current.get("total"))
+        if b_total is not None and c_total + EPS < b_total:
+            problems.append(
+                {"kind": "total", "detail": "总分 %s -> %s" % (b_total, c_total)}
+            )
 
-    b_cats = baseline.get("per_category") or {}
-    c_cats = current.get("per_category") or {}
-    if isinstance(b_cats, dict):
-        for name, node in b_cats.items():
-            if name not in c_cats:
-                problems.append(
-                    {"kind": "category", "category": name, "detail": "新报告缺少类别 %s" % name}
-                )
-                continue
-            if _earned(c_cats.get(name)) + EPS < _earned(node):
-                problems.append(
-                    {
-                        "kind": "category",
-                        "category": name,
-                        "detail": "类别 %s 得分 %s -> %s"
-                        % (name, _earned(node), _earned(c_cats.get(name))),
-                    }
-                )
+        b_cats = baseline.get("per_category") or {}
+        c_cats = current.get("per_category") or {}
+        if isinstance(b_cats, dict):
+            for name, node in b_cats.items():
+                if name not in c_cats:
+                    problems.append(
+                        {"kind": "category", "category": name, "detail": "新报告缺少类别 %s" % name}
+                    )
+                    continue
+                if _earned(c_cats.get(name)) + EPS < _earned(node):
+                    problems.append(
+                        {
+                            "kind": "category",
+                            "category": name,
+                            "detail": "类别 %s 得分 %s -> %s"
+                            % (name, _earned(node), _earned(c_cats.get(name))),
+                        }
+                    )
 
     b_questions = {
         item["id"]: item
@@ -127,8 +140,25 @@ def compare(baseline: dict, current: dict) -> list[dict]:
         for item in (current.get("questions") or [])
         if isinstance(item, dict) and "id" in item
     }
-    for qid, before in b_questions.items():
-        after = c_questions.get(qid)
+
+    if subset:
+        # 只看新报告里出现的题目；基线里没有的题目无法比较，也要报出来。
+        pairs = list(c_questions.items())
+    else:
+        pairs = [(qid, c_questions.get(qid)) for qid in b_questions]
+
+    for qid, after in pairs:
+        before = b_questions.get(qid)
+        if before is None:
+            problems.append(
+                {
+                    "kind": "unknown",
+                    "id": qid,
+                    "category": (after or {}).get("category"),
+                    "detail": "基线里没有这道题，局部比较无从判定",
+                }
+            )
+            continue
         if after is None:
             problems.append(
                 {
@@ -159,8 +189,10 @@ def compare(baseline: dict, current: dict) -> list[dict]:
     return problems
 
 
-def format_problems(problems: list[dict]) -> str:
+def format_problems(problems: list[dict], *, subset: bool = False) -> str:
     if not problems:
+        if subset:
+            return "局部比较没有发现回归：新报告里出现的题目均不低于基线。"
         return "没有发现回归：总分、分类、逐题通过状态均不低于基线。"
     lines = ["发现 %d 处回归：" % len(problems)]
     for item in problems:
@@ -172,6 +204,11 @@ def format_problems(problems: list[dict]) -> str:
         elif kind == "missing":
             lines.append(
                 "  [缺题] %s（%s）%s" % (item.get("id"), item.get("category"), item["detail"])
+            )
+        elif kind == "unknown":
+            lines.append(
+                "  [基线无此题] %s（%s）%s"
+                % (item.get("id"), item.get("category"), item["detail"])
             )
         else:
             extra = ""
@@ -216,6 +253,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--update", action="store_true", help="用新报告覆盖基线并退出")
     parser.add_argument("--note", default="mock 基线（无 Key 降级模式）", help="写入基线时的说明")
+    parser.add_argument(
+        "--subset",
+        action="store_true",
+        help="局部比较：只比新报告里出现过的题目（调试时 --only <类别> 用），"
+        "不比较总分与分类分；基线里没有的题号会报错。",
+    )
     args = parser.parse_args(argv)
 
     current_path = Path(args.report)
@@ -253,9 +296,14 @@ def main(argv: list[str] | None = None) -> int:
             print("  -", item)
         return EXIT_REPORT_ERROR
 
-    regressions = compare(baseline, current)
-    print(format_problems(regressions))
+    regressions = compare(baseline, current, subset=args.subset)
     total = current.get("total", {})
+    if args.subset:
+        print(
+            "[局部比较] 只比对新报告里的 %s 道题；总分与分类分未比较（局部跑分与全量基线不可比）。"
+            % total.get("questions")
+        )
+    print(format_problems(regressions, subset=args.subset))
     print(
         "当前：earned=%s/%s questions=%s passed=%s"
         % (total.get("earned"), total.get("points"), total.get("questions"), total.get("passed"))

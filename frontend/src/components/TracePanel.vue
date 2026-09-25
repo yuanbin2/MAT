@@ -13,6 +13,11 @@ const notFound = ref(false)
 const manualId = ref('')
 const copied = ref(false)
 const collapsed = ref<Record<string, boolean>>({})
+const expandedFilters = ref<Record<string, boolean>>({})
+
+//: 请求序号。快速连续切 trace ID 时，先发的请求可能后回来——只认最新那一次的结果，
+//: 否则面板会显示成"另一个 trace 的内容"，排查时会被带偏。
+let requestSeq = 0
 
 const modeLabel = computed(() =>
   trace.value?.mode === 'live' ? '在线（真实模型）' : '降级（mock，未调用模型）',
@@ -20,35 +25,54 @@ const modeLabel = computed(() =>
 
 async function load(traceId: string) {
   const id = traceId.trim()
-  if (!id) return
+  const seq = ++requestSeq
   manualId.value = id
-  loading.value = true
+  // 先无条件清空：换 ID、或者点了空查询，都不该继续显示上一条 trace 的内容。
+  trace.value = null
   error.value = ''
   notFound.value = false
-  trace.value = null
+  if (!id) {
+    loading.value = false
+    return
+  }
+  loading.value = true
   try {
-    trace.value = await fetchTrace(id)
+    const payload = await fetchTrace(id)
+    if (seq !== requestSeq) return // 已经有更新的请求了，这条响应作废
+    trace.value = payload
   } catch (e) {
+    if (seq !== requestSeq) return
     if (e instanceof TraceNotFoundError) {
       notFound.value = true
     } else {
       error.value = (e as Error).message || '接口失败'
     }
   } finally {
-    loading.value = false
+    if (seq === requestSeq) loading.value = false
   }
 }
 
 watch(
   () => [props.open, props.traceId],
   () => {
-    if (props.open && props.traceId) load(props.traceId)
+    // 关着的时候不管；打开时一律走 load——包括 traceId 为空，
+    // 那时的正确行为是清空旧内容，而不是把上一条留在屏幕上。
+    if (props.open) load(props.traceId)
   },
   { immediate: true },
 )
 
 function toggle(key: string) {
   collapsed.value[key] = !collapsed.value[key]
+}
+
+function toggleFilters(key: string) {
+  expandedFilters.value[key] = !expandedFilters.value[key]
+}
+
+/** 过滤原因默认只显示前几条，点一下展开全部——排查"为什么这篇没进来"时要能看全。 */
+function visibleFiltered(key: string, list: { doc_id: string; reason: string }[]) {
+  return expandedFilters.value[key] ? list : list.slice(0, 4)
 }
 
 function pretty(value: unknown): string {
@@ -174,22 +198,31 @@ function exportJson() {
             </div>
             <table class="mini-table">
               <thead>
-                <tr><th>doc_id</th><th>分数</th><th>片段</th></tr>
+                <tr><th>doc_id</th><th>chunk_id</th><th>分数</th><th>片段</th></tr>
               </thead>
               <tbody>
                 <tr v-for="(h, j) in r.hits" :key="'h' + j" :class="{ 'row--padded': h.padded }">
                   <td class="nowrap">{{ h.doc_id }}</td>
+                  <td class="nowrap muted-cell">{{ h.chunk_id }}</td>
                   <td class="num nowrap">{{ h.score }}</td>
                   <td>
                     <span v-if="h.padded" class="tag tag--muted">补位</span>
+                    <span v-if="h.kind === 'table'" class="tag tag--muted">表格</span>
                     <span class="clip">{{ h.preview }}</span>
                   </td>
                 </tr>
               </tbody>
             </table>
             <div v-if="r.filtered && r.filtered.length" class="filters">
-              <span class="filters__label">被过滤 {{ r.filtered.length }} 篇：</span>
-              <span v-for="(f, j) in r.filtered.slice(0, 4)" :key="'f' + j" class="filter-item">
+              <button class="filters__toggle" @click="toggleFilters('f' + i)">
+                被过滤 {{ r.filtered.length }} 篇
+                {{ expandedFilters['f' + i] ? '（收起）' : '（展开全部）' }}
+              </button>
+              <span
+                v-for="(f, j) in visibleFiltered('f' + i, r.filtered)"
+                :key="'f' + j"
+                class="filter-item"
+              >
                 {{ f.doc_id }}（{{ f.reason }}）
               </span>
             </div>
@@ -206,6 +239,7 @@ function exportJson() {
                 {{ t.tool }}
                 <span class="tag" :class="`tag--${t.status}`">{{ t.status }}</span>
                 <span v-if="t.accepted" class="tag tag--ok">已用于{{ t.entered === 'citations' ? '引用' : '证据' }}</span>
+                <span v-else-if="t.pending" class="tag tag--warn">待回答定稿后核对</span>
                 <span v-else class="tag tag--muted">未采纳</span>
               </span>
               <span class="sub__meta num">{{ fmtMs(t.took_ms) }}<template v-if="t.result_bytes"> · {{ t.result_bytes }} B</template></span>
@@ -510,6 +544,10 @@ function exportJson() {
   background: #eef5f3;
   color: var(--c-primary);
 }
+.tag--warn {
+  background: #fbf3e8;
+  color: var(--c-amber);
+}
 .tag--rejected,
 .tag--error {
   background: #f7eeee;
@@ -525,8 +563,22 @@ function exportJson() {
   color: var(--c-text-secondary);
   line-height: 1.7;
 }
-.filters__label {
+.filters__toggle {
   color: var(--c-amber);
+  background: none;
+  border: none;
+  padding: 0;
+  margin-right: 10px;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.filters__toggle:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+}
+.muted-cell {
+  color: var(--c-text-secondary);
 }
 .filter-item {
   margin-right: 10px;

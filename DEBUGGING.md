@@ -31,10 +31,17 @@ python eval/check_regression.py --report report.json      # 非零退出 = 有�
 |---|---|
 | 概览 | 回答类型、模式（mock/live）、总耗时、错误数 |
 | 问题理解 | 补全问题对不对；时间窗/门店/商品/指标识别对不对；检索查询是什么 |
-| 知识库检索 | 命中的 doc_id/分数/片段预览、补位标识、被过滤的原因 |
+| 知识库检索 | 命中的 doc_id/**chunk_id**/分数/片段预览、补位与表格标识；被过滤的原因默认显示前 4 条，点「展开全部」看全 |
 | 工具与数据 | 每个工具的参数、结果、耗时、**是否进入回答依据**、拒绝原因 |
 | 模型与异常 | live 的逐轮请求/原始响应；mock 显示「本次未调用模型」 |
 | 时间线 | 每步发生顺序与耗时（缺失显示「未记录」） |
+
+> **采纳标记怎么读**：`已用于引用/证据`、`未采纳`、`待回答定稿后核对` 三种。
+> 采纳状态是**回答定稿之后**按最终返回的 `citations` / `data_evidence` 回填的，
+> 所以"检索执行成功""返回了候选片段"都不等于被引用——`未采纳` 旁边会写清是哪一种：
+> 零命中、命中但没引用、结果没进最终依据（多半是回退了）。
+> 正常收尾之后不该再看到「待定」；看到就说明这轮没走到定稿（例如模型失败）。
+
 
 ## 2. 按顺序排除（约 10 分钟）
 
@@ -71,16 +78,37 @@ from kbqa.tools import DataTools; print(DataTools(s.clean_db).cleaning_report())
 
 ## 4. 最小修复 + 回归（约 15 分钟）
 
+**先加会红的测试，再改实现**（见 `DEBUG_LOG.md` 的分层记录）。
+
+改完先跑相关层的单测（秒级）：
+
 ```bash
 cd starter
 .venv/Scripts/python -m pytest tests -q                    # 全量后端测试
 .venv/Scripts/python -m pytest tests/test_trace.py -q      # 只跑相关层
-cd ..
-python eval/run_eval.py --base-url http://localhost:8000 --questions eval/public_questions.jsonl --only doc
+```
+
+然后是评测。这里要分清两件事，**别把"快速定位"当成"判定"**：
+
+```bash
+# ① 快速定位：只跑相关类别，几秒钟，用来看"我这几题好没好"
+python eval/run_eval.py --base-url http://localhost:8000 \
+    --questions eval/public_questions.jsonl --only doc
+#    → 这份 report.json 是**局部**的，不能直接跟全量基线比（总分与分类分都不可比，
+#      直接比会刷出一堆"缺题"假回归）。局部场景要加 --subset 才是明确定义的比较：
+python eval/check_regression.py --report report.json --subset
+#    → 只比新报告里出现过的题目，并明确声明总分/分类分未比较
+
+# ② 最终判定：跑完整题库，再跟全量基线比（这才算回归门禁）
+python eval/run_eval.py --base-url http://localhost:8000 \
+    --questions eval/public_questions.jsonl
 python eval/check_regression.py --report report.json       # 必须回到 0
 ```
 
-**先加会红的测试，再改实现**（见 `DEBUG_LOG.md` 的分层记录）。改完重跑上面的两步，确认没有别的题被带崩。
+- `--only <类别>`：**只用于快速定位**，它的分数不是公开题库成绩。
+- `--subset`：局部比较，会打印"总分与分类分未比较"；基线里没有的题号会直接报错。
+- 不加 `--subset` 就是全量严格比较：基线里有题而新报告没有 → 判"缺题"失败（防止靠删题变绿）。
+- 定稿/提交前必须跑 ②，别用 ① 的结果交差。
 
 ## 5. 替换知识库 / 数据之后怎么刷新（约 5 分钟）
 
