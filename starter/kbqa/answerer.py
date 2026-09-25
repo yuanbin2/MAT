@@ -63,14 +63,16 @@ class Answerer(HybridAnswers):
         fitted = fit_evidence(trimmed)
         evidence.append({"tool": name, "params": params, "result": fitted})
         if trace is not None:
+            # 采纳状态不在这里下结论：定稿后由 Trace.reconcile() 按最终 data_evidence 回填
+            # （万一上层把这份证据丢掉、回退成别的回答，它就不该显示成"已采纳"）。
             trace.tool(
                 tool=name,
                 params=params,
                 status="ok",
                 result=fitted,
                 took_ms=(time.perf_counter() - started) * 1000,
-                accepted=True,
-                entered="data_evidence",
+                pending=True,
+                evidence_result=fitted,
                 source="answerer",
             )
         return result

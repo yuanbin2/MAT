@@ -30,6 +30,9 @@ TOOL_PREVIEW_CHARS = 400
 #: trace 里模型请求/响应的长度兜底（正常一轮远小于它）。
 MAX_LLM_TEXT = 200_000
 
+#: 工具调用刚记下、还不知道算不算被采纳时的占位原因（回答定稿后会被 replace）。
+PENDING_REASON = "待回答定稿后核对是否被采用"
+
 _ID_RE = re.compile(r"^t-(\d{8})-(\d+)$")
 
 
@@ -77,26 +80,43 @@ class Trace:
         reject_reason: Optional[str] = None,
         entered: str = "",
         source: str = "",
-    ) -> None:
+        pending: bool = False,
+        evidence_result: Any = None,
+        retrieved_doc_ids: Optional[list] = None,
+    ) -> dict:
         """记录一次真实执行过的工具/检索调用。
 
         ``accepted`` 表示结果是否进入最终回答依据；``entered`` 说明进了哪里
         （``data_evidence`` / ``citations``）。因 Plan 范围不一致等原因被拒绝时
         ``status="rejected"`` 且带 ``reject_reason``，绝不标成已采纳的证据。
+
+        ``pending=True`` 给"此刻还不知道算不算数"的调用用。检索执行成功、返回了候选片段、
+        最终真的被引用，这是**三件不同的事**；数据库工具"查到了真实数字"和"这个数字进了
+        最终回答"也不是一回事。这类条目先记成未采纳，等回答定稿后由 ``reconcile()``
+        按最终 ``citations`` / ``data_evidence`` 回填——避免出现"面板说引用了、回答里其实没有"。
         """
         entry: dict[str, Any] = {
             "tool": tool,
             "params": params,
             "status": status,
-            "took_ms": round(took_ms, 1) if took_ms is not None else None,
-            "accepted": accepted,
+            # 未定稿前一律 accepted=False：宁可先显示"未采纳"，也不能提前声称被采纳。
+            "accepted": False if pending else accepted,
         }
+        if pending:
+            entry["pending"] = True
+            entry["reject_reason"] = reject_reason or PENDING_REASON
+        entry["took_ms"] = round(took_ms, 1) if took_ms is not None else None
         if entered:
             entry["entered"] = entered
-        if reject_reason:
+        if reject_reason and not pending:
             entry["reject_reason"] = reject_reason
         if source:
             entry["source"] = source
+        if evidence_result is not None:
+            # 私有字段：只用于定稿后按对象身份核对，不进 /api/trace 的返回。
+            entry["_evidence_obj"] = evidence_result
+        if retrieved_doc_ids is not None:
+            entry["_doc_ids"] = [doc_id for doc_id in retrieved_doc_ids if doc_id]
         if result is not None:
             try:
                 blob = json.dumps(result, ensure_ascii=False, default=str)
@@ -112,9 +132,58 @@ class Trace:
                 "step": "tool",
                 "at_ms": round((time.perf_counter() - self._t0) * 1000, 1),
                 "took_ms": entry["took_ms"],
-                "detail": {"tool": tool, "status": status, "accepted": accepted},
+                "detail": {"tool": tool, "status": status, "accepted": entry["accepted"]},
             }
         )
+        return entry
+
+    def reconcile(self, *, evidence: Any = None, citations: Any = None) -> int:
+        """回答定稿后回填"待定"条目的采纳状态，返回改动的条目数。
+
+        判定依据只有最终返回给调用方的那两份东西：``data_evidence`` 与 ``citations``。
+        其它来源（问题原文、整篇文档、参数、曾经检索到过）都不算数。
+
+        - 数据库/检查类：结果对象确实出现在最终证据里 → ``data_evidence``；
+          否则不算采纳——模型可能改用了别的证据，或者本轮整体回退成了拒答。
+        - ``search_kb``：执行成功且返回候选**不等于**被引用；只有最终引用里出现它命中过的
+          doc_id 才算 ``citations``，否则说明是"检索到了但没用上"。
+        """
+        used = {id(item.get("result")) for item in (evidence or []) if isinstance(item, dict)}
+        cited = {
+            item.get("doc_id") for item in (citations or []) if isinstance(item, dict)
+        }
+        changed = 0
+        for entry in self.tools:
+            if not entry.pop("pending", False):
+                continue
+            changed += 1
+            if entry.get("tool") == "search_kb":
+                doc_ids = set(entry.get("_doc_ids") or [])
+                if doc_ids & cited:
+                    entry["accepted"] = True
+                    entry["entered"] = "citations"
+                    entry.pop("reject_reason", None)
+                else:
+                    entry["accepted"] = False
+                    entry.pop("entered", None)
+                    entry["reject_reason"] = (
+                        "检索没有命中任何片段，没有可引用的依据"
+                        if not doc_ids
+                        else "检索到候选片段，但最终回答没有引用它们"
+                    )
+                continue
+            obj = entry.get("_evidence_obj")
+            if obj is not None and id(obj) in used:
+                entry["accepted"] = True
+                entry["entered"] = "data_evidence"
+                entry.pop("reject_reason", None)
+            else:
+                entry["accepted"] = False
+                entry.pop("entered", None)
+                entry["reject_reason"] = (
+                    "结果没有进入最终回答依据（本轮可能改用了其它证据，或已回退成拒答）"
+                )
+        return changed
 
     def error(self, where: str, exc: BaseException) -> None:
         """真实原因要留下来：类型、消息、堆栈，一个都不少。"""
@@ -140,7 +209,11 @@ class Trace:
             "total_ms": round((time.perf_counter() - self._t0) * 1000, 1),
             "plan": self.plan,
             "retrievals": self.retrievals,
-            "tools": self.tools,
+            # 私有字段（_evidence_obj / _doc_ids）只用于定稿后核对，不外泄。
+            "tools": [
+                {key: value for key, value in entry.items() if not key.startswith("_")}
+                for entry in self.tools
+            ],
             "answer": self.answer,
             "model_called": bool(self.llm_calls),
             "llm_calls": self.llm_calls,

@@ -112,20 +112,22 @@ class LiveEngine:
                     result = self._search_kb(params, plan, trace, started)
                     # 去指令化后才进模型上下文与归档：知识库里的指令句只是资料。
                     result = self._clean_kb_result(result, trace)
+                    hits = result.get("results") or []
+                    # 检索"成功且返回了候选"不等于"最终被引用"——采纳状态留给定稿后核对。
                     trace.tool(
                         tool="search_kb",
                         params=params,
                         status="ok",
                         result=[
                             {"doc_id": hit.get("doc_id"), "score": hit.get("score")}
-                            for hit in (result.get("results") or [])
+                            for hit in hits
                         ],
                         took_ms=(time.perf_counter() - started) * 1000,
-                        accepted=True,
-                        entered="citations",
+                        pending=True,
+                        retrieved_doc_ids=[hit.get("doc_id") for hit in hits],
                         source="live",
                     )
-                    for hit in result.get("results") or []:
+                    for hit in hits:
                         doc_id = hit.get("doc_id")
                         if doc_id:
                             retrieved_docs.setdefault(doc_id, []).append(hit)
@@ -159,14 +161,15 @@ class LiveEngine:
                         )
                     else:
                         fitted = fit_evidence(result)
+                        # 查到真实数字 ≠ 这个数字进了最终回答：同样留给定稿后核对。
                         trace.tool(
                             tool=name,
                             params=params,
                             status="ok",
                             result=fitted,
                             took_ms=took_ms,
-                            accepted=True,
-                            entered="data_evidence",
+                            pending=True,
+                            evidence_result=fitted,
                             source="live",
                         )
                         evidence.append({"tool": name, "params": params, "result": fitted})

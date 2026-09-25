@@ -142,6 +142,10 @@ class Service:
         )
         trace.mode = self.settings.llm_mode
         answer = self._answer(trace, session_id, question or "")
+        # 采纳状态在**回答定稿之后**核对：只看最终要返回给调用方的 citations 与
+        # data_evidence。工具执行成功、检索返回了候选片段，都不等于被采纳；
+        # 回退成拒答时本轮所有工具结果都应当显示为未采纳。
+        trace.reconcile(evidence=answer.data_evidence, citations=answer.citations)
         payload = {
             "answer": answer.answer,
             "answer_type": answer.answer_type,
