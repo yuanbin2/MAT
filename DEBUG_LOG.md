@@ -428,12 +428,80 @@
 
 ---
 
+## 分层 8：`.env` 配置支持，以及本轮自己引入的测试隔离缺陷
+
+### D28 `config.py` 只读 `os.environ`，但文档已声称可以用 `.env`
+
+- **现象**：README 与 `LLM_SETUP.md` 第 2 节都写着"本地开发把 Key 放 `.env`"，但把 `.env` 放到仓库根后
+  `/api/health` 仍报 `llm_mode=mock`。文档与实现不一致。
+- **验证**：仓库根写一份三个值齐全的 `.env` → 直接起服务 → `llm_mode=mock`。
+  原因很直接：`load_settings()` 只做 `os.environ.get(...)`，全项目没有任何地方读文件，
+  也没装 `python-dotenv`（`_path_from_env` 只认已存在的环境变量）。
+- **修复**：`starter/kbqa/config.py` 增加 `parse_env_file()` 与 `load_env_files()`，
+  `load_settings()` 开头先把 `.env` 补进 `os.environ`，之后照旧只读环境变量（**配置来源始终是环境变量**，
+  `.env` 只是个注入器）。两条约定：
+  - **真实环境变量优先**——`.env` 只补"环境里本来没有、且不是上一轮由文件写进去"的键，
+    所以评测/预检注入的 `LLM_*` 不会被本地 `.env` 带偏；
+  - **`ENV_FILE=`（空串 / `off` / `none` / `0`）整体关掉**——一个文件都不读，测试/CI/mock 演练靠它。
+  查找顺序：仓库根 `.env` → `starter/.env`（后者可覆盖前者同名键）。
+- **配套改动**：新增 `.env.example`（只有占位值）；`Makefile` 加 `run-mock` 目标并 export `ENV_FILE`；
+  CI 顶层加 `ENV_FILE: ''`（显式保证 CI 是纯 mock）；
+  `eval/drill_new_doc.py` 光删环境变量不够——服务启动时会把 `LLM_*` 从 `.env` 补回来，
+  必须同时设 `ENV_FILE=""`，否则"强制 mock"失效。
+- **回归测试**：`tests/test_env_file.py` 20 例（解析规则：注释/export/单双引号/行内注释/空值/值里含 `=`；
+  `ENV_FILE` 的默认·off·自定义多路径；真实环境变量优先；后一个文件覆盖前一个；缺失文件容错；
+  `ENV_FILE=` 时保持 mock；以及"`.env` 必须被忽略、`.env.example` 必须可入库"的守门用例）。
+- **修复后**：仓库根放 `.env` 直接起服务 → `llm_mode=live`，实测 live 问答返回
+  `162414.00 元 / 4446 单 / 36.53 / 6789 件 / 494.00 退款`，证据是真实的 `query_metrics`；
+  `ENV_FILE=` 起服务 → `llm_mode=mock`。
+
+### D29 新增的 `.env` 测试把 `os.environ` 泄漏给后续用例，导致无关用例去请求真实模型
+
+- **现象**：加完 `.env` 测试后，全量测试从 `167 passed` 变成 `2 failed, 183 passed`——
+  `test_kb_drill::test_new_doc_drill` 报 `'KB-099' in []`（拿到 refusal）、
+  `test_trace::test_hybrid_chat_trace_records_citation_and_evidence` 失败；
+  **这两个用例单独跑都通过**，明显是顺序污染。
+- **排除的假设**：不是 `.env` 读取本身（`conftest` 已设 `ENV_FILE=""`，实测每例开始时 `ENV_FILE=''`）；
+  不是检索索引缓存；不是 `_ENV_FROM_FILES` 复位。
+- **定位**：写了个临时 pytest 插件，在每个用例的 `pytest_runtest_setup` 打印
+  `ENV_FILE` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL`。输出显示从
+  `test_load_env_files_fills_missing_keys` 之后，`LLM_API_KEY='sk-from-fi…'`、`LLM_MODEL='demo'`、
+  `LLM_BASE_URL='https://example.test/v1'` 一直留在环境里 → 后面的用例
+  `Service(load_settings())` 进入 live 模式，去请求根本不存在的 `https://example.test/v1`，于是拒答。
+- **根因（有最小复现）**：`load_env_files()` 是**直接写 `os.environ`** 的；而
+  `monkeypatch.delenv(key, raising=False)` 对**本来就不存在的键不留撤销记录**——
+  `_pytest.monkeypatch.MonkeyPatch.delitem` 的第一个分支直接返回：
+  ```python
+  if name not in dic:
+      if raising:
+          raise KeyError(name)
+      # ← 不 append 到 _setitem，undo() 无从还原
+  else:
+      self._setitem.append((dic, name, dic.get(name, NOTSET)))
+      del dic[name]
+  ```
+  于是"先 `delenv`（键不存在）→ 之后被文件写回"的键，用完就留在环境里。
+  最小复现：`test_a` 里 `delenv("FOO_X", raising=False)` 再 `os.environ["FOO_X"]="leaked"`，
+  `test_b` 里 `os.environ.get("FOO_X")` 得到 `'leaked'`。
+- **修复**：`tests/test_env_file.py` 的 autouse 夹具改成**手写快照还原**——
+  记下用例开始前的 `os.environ`，结束后删掉新增的键、把原有键恢复原值；不再依赖 `delenv`。
+  另加一对守门用例（`test_leak_guard_writes_env_from_file` → `test_leak_guard_next_case_sees_nothing`）
+  把这个行为钉住。
+- **修复后**：`187 passed`，连跑两遍结果一致；两个原本失败的用例恢复正常。
+
+> 教训：`monkeypatch` 只能撤销**它自己记录过**的改动。被测代码直接写全局可变状态
+> （环境变量、模块级字典等）时，夹具必须自己快照/还原，不能假设 `monkeypatch` 兜得住。
+
+---
+
 ## 尚未解决 / 已知边界
 
-- 无 LLM Key 的 mock 降级模式已满分；live 模式（配置真实模型后）未在本机对真实 API 跑过，
-  `LLM_SETUP.md` 与 `eval/llm_gateway.py preflight` 留待第三关接入时完成。
-  本轮已把 live 的**取证闸门**（数字/引用白名单、检索去指令化、证据体积）与**可观察性**
-  （完整请求/响应入 trace、Key 脱敏）用打桩做成了 13 个单元测试，接入真 Key 后可直接复跑。
+- 无 Key 的 mock 降级模式公开题库满分；**评审配置（DeepSeek）的真实 live 未验证**，
+  `eval/llm_gateway.py preflight` 为 13 项通过 + P14「未检查」（原因见 `LLM_SETUP.md` 第 7 节）。
+  live 链路本身已用 StepFun `step-5-preview` 真机跑通（数据/文档/混合/追问四类问答均正确），
+  但那不是评审配置，只作过程记录，不能当成 DeepSeek 成绩。
+  live 的**取证闸门**（数字/引用白名单、检索去指令化、证据体积）与**可观察性**
+  （完整请求/响应入 trace、Key 脱敏）另外用打桩做成了单元测试，接入真 Key 后可直接复跑。
 - 检索为纯 BM25 + 别名扩写，未引入向量检索；跨语言靠别名表的 distinctive token（如 `salmon`→三文鱼poke），
   覆盖了公开题库，但对知识库之外的近义表述仍依赖词典。
 - `run_sql` 是词法闸门而非 SQL 解析器：它按 token 判定（已排除注释/字符串误伤）并额外拦住

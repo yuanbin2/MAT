@@ -20,7 +20,27 @@
 - 三个值**只**从环境变量读（`starter/kbqa/config.py`），代码里没有任何写死的模型名 / Key / 地址。
 - 可选：`LLM_TIMEOUT`（单次调用超时秒数，默认 120）、`CHAT_BUDGET`（`/api/chat` 整体预算秒数，默认 150）。
 - **不在启动时校验 Key 格式、不查余额、不列模型**（契约 §7.2/§7.3）。
-- 本地开发把 Key 放 `.env`（已加入 `.gitignore`，绝不入库）；仓库里只有 `.env.example` 占位样例。
+
+### 用 `.env` 存 Key（本地开发，可选）
+
+不想每次手敲环境变量，就在仓库根放一个 `.env`（`.gitignore` 已忽略，绝不入库）：
+
+```bash
+cp .env.example .env        # 然后把三个值填进去
+```
+
+启动时 `load_settings()` 会先调 `load_env_files()` 把 `.env` 补进 `os.environ`，之后照旧只读环境变量——
+配置来源始终是环境变量，`.env` 只是个方便的注入器。两条约定值得记住：
+
+| 约定 | 说明 |
+|---|---|
+| **真实环境变量优先** | `.env` 只补"环境里本来没有"的键。所以在注入 `LLM_*` 的进程里（预检、mock 演练）本地 `.env` 不会带偏它们 |
+| **可以整体关掉** | `ENV_FILE=`（空串，或 `off`/`none`/`0`）→ 一个文件都不读。测试、CI、mock 演练都靠这个 |
+
+- 查找顺序：仓库根 `.env` → `starter/.env`（后者可覆盖前者同名键）；也可用 `ENV_FILE=/path/a.env` 指定，
+  多文件用系统路径分隔符（Windows `;`、Linux `:`）连接。
+- 关掉 `.env` 起服务：`ENV_FILE= python -m uvicorn kbqa.server:app --port 8000`（等价 `make run-mock`）。
+- 仓库里只提交 `.env.example`（占位值）。有测试守着这条：`.env` 必须被忽略、`.env.example` 必须可入库。
 
 ## 3. 无 Key 降级（mock）模式
 

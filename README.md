@@ -14,6 +14,10 @@
 
 需要 Python 3.12+ 和 Node.js 18+。
 
+> **可选：接入真实模型。** 复制 `.env.example` 为 `.env`，填上 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`，
+> 启动时自动读入（`.env` 已在 `.gitignore` 里，Key 不会入库）。**不配也能跑**——服务进入 mock 降级模式，
+> 看板、检索、问答都照常工作。`/api/health` 的 `llm_mode` 会如实显示当前是 `live` 还是 `mock`。
+
 **第 1 步：装依赖**
 
 ```bash
@@ -55,10 +59,10 @@ npm run dev               # 前端：http://localhost:5173，/api 自动代理�
 
 ```bash
 cd starter
-make test                 # 后端测试（167 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
+make test                 # 后端测试（187 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
                           # 只读 SQL 闸门、SQLite 内部对象、业务表白名单、有界读取、证据体积、
                           # live 数字取证、search_kb 继承 Plan、trace 记录与持久化、
-                          # loader doc_id、新增文档/换数据演练等
+                          # loader doc_id、.env 读取、新增文档/换数据演练等
 ```
 
 > `run_sql` 只接受单条只读查询（`SELECT`/`WITH … FROM`），拒绝 `sqlite_master`/`sqlite_schema`/
@@ -77,6 +81,13 @@ python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/publi
 ```
 
 公开题库（无 Key 的 mock 降级模式）实测满分 100/100，分数与运行命令见 `EVAL_REPORT.md`；逐缺陷根因见 `DEBUG_LOG.md`。
+
+> ⚠️ **配了 `.env` 之后服务默认是 live 模式**，这时跑出来的是真实模型成绩，不是 mock 基线。
+> 要复现 mock 基线（评测、门禁、演练都以此为准），把 `.env` 关掉再起服务：
+>
+> ```bash
+> ENV_FILE= python -m uvicorn kbqa.server:app --port 8000     # ENV_FILE= 表示一个字都不读 .env
+> ```
 
 ## 回归门禁
 
@@ -109,8 +120,12 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py                     
 
 ## 模型接入（live / mock）
 
-- **mock**：不配 `LLM_API_KEY` 时，`/api/chat` 走本地规划 + 检索 + 工具取数 + 模板渲染，公开题库满分，前端显示「本地演示 · 降级模式」。
-- **live**：配好 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` 后，`/api/chat` 走模型编排（模型出候选 → 代码核验数字/引用/范围 → 可信才返回），前端显示「已接入大模型 · 在线」。
+- **配置来源**：只认 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` 三个环境变量；本地想在 `.env` 里写一份，
+  启动时会自动补进环境变量（`starter/kbqa/config.py` 的 `load_env_files`）。两条约定：
+  - **真实环境变量优先**：`.env` 只补环境里还没有的键，所以评测/预检脚本注入的 `LLM_*` 不会被本地 `.env` 带偏；
+  - **可以整体关掉**：`ENV_FILE=`（空串，或 `off`/`none`/`0`）表示一个字都不读，测试、CI、mock 演练都靠它。
+- **mock**：不配 Key 时，`/api/chat` 走本地规划 + 检索 + 工具取数 + 模板渲染，公开题库满分，前端显示「本地演示 · 降级模式」。
+- **live**：配好三件套后，`/api/chat` 走模型编排（模型出候选 → 代码核验数字/引用/范围 → 可信才返回），前端显示「已接入大模型 · 在线」。
 - 切换只改环境变量、不改代码；接入预检（16 场景 P1–P14）13 项通过、1 项未检查，详见 **`LLM_SETUP.md` 第 7 节**。
 - 混合问答的真实演示（提问 → 查询 → 文档引用 → 界面证据）见 **`DEMO.md`**。
 
