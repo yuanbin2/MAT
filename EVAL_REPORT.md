@@ -278,7 +278,9 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py
 
 此前只人工试问过四类问题。本轮用**现有 StepFun 配置**（模型 `step-5-preview`，
 `https://api.stepfun.com/step_plan/v1`）跑了完整的公开题库（55 题）与自拟题库（13 题），
-逐题 `report.json` 全部保留在 `eval/reports/` 下。
+逐题 `report.json` 全部保留在 `eval/reports/` 下；其中**最终两轮（v6 / v5）的脱敏逐题结果
+已提交到 `docs/eval/`**（不被 `.gitignore` 忽略），供独立核对这里的 live 分数——不含 Key、
+不含本地路径与 trace 正文，详见 `docs/eval/README.md`。
 
 **账号在 14:30 前后恢复，成绩因此分两段：**
 
