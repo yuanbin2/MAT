@@ -128,6 +128,14 @@ class Settings:
     @property
     def index_path(self) -> Path:
         # 索引缓存跟着仓库走，clone 下来就能直接起服务，不用等建索引。
+        #
+        # INDEX_PATH 可以把它挪到别处：演练与测试**必须**用这个口子。
+        # 否则临时知识库（比如新增了一篇文档的副本）重建出来的索引会覆盖
+        # 仓库里跟踪的那份 .cache/index.json——历史上真的发生过，
+        # 导致提交进仓库的索引与真实知识库对不上。
+        override = os.environ.get("INDEX_PATH")
+        if override:
+            return Path(override).expanduser().resolve()
         return PROJECT_DIR / ".cache" / "index.json"
 
     @property

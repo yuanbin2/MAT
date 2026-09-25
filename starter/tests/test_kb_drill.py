@@ -2,16 +2,26 @@
 
 全程在**临时副本**里做（知识库、数据、索引缓存、clean.db 都指向 tmp），
 不污染正式知识库、数据与已跟踪的索引缓存。
+
+索引隔离靠 `INDEX_PATH`：索引默认写在 `starter/.cache/index.json`（仓库里跟踪的那份），
+不重定向的话用临时知识库重建出来的索引会把它覆盖掉——这既是隔离问题，也会让
+"提交进仓库的索引"与真实 `knowledge_base/` 对不上。
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import sqlite3
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+STARTER = REPO / "starter"
+TRACKED_INDEX = STARTER / ".cache" / "index.json"
 
 NEW_DOC = """---
 doc_id: KB-099
@@ -28,14 +38,66 @@ effective_from: 2026-08-20
 """
 
 
+def _count_docs(kb_dir: Path) -> int:
+    """知识库里的文档数（与 loader 的口径一致：带 KB-\\d+ 编号的文件）。"""
+    from kbqa.loader import load_knowledge_base
+
+    docs, _ = load_knowledge_base(kb_dir)
+    return len(docs)
+
+
 def _settings_for(tmp_path, monkeypatch, kb_dir: Path, data_dir: Path):
     """构造一套指向临时目录的配置，并把索引缓存也挪到 tmp。"""
-    from kbqa.config import Settings, load_settings
+    from kbqa.config import load_settings
 
-    # index_path 是属性、不随 env 变；直接给类打补丁，避免污染仓库 .cache/index.json。
-    monkeypatch.setattr(Settings, "index_path", property(lambda self: tmp_path / "index.json"))
+    # 索引走 INDEX_PATH 重定向，不再给 Settings.index_path 打补丁。
+    monkeypatch.setenv("INDEX_PATH", str(tmp_path / "index.json"))
     base = load_settings()
     return replace(base, kb_dir=kb_dir, data_dir=data_dir, var_dir=tmp_path / "var")
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "(不存在)"
+
+
+def _git_status() -> str:
+    proc = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.stdout
+
+
+def test_index_path_can_be_redirected(tmp_path, monkeypatch):
+    """INDEX_PATH 必须真的能改掉索引位置——演练与测试的隔离全靠它。"""
+    from kbqa.config import load_settings
+
+    target = tmp_path / "nested" / "index.json"
+    monkeypatch.setenv("INDEX_PATH", str(target))
+    assert load_settings().index_path == target.resolve()
+
+
+def test_tracked_index_matches_real_knowledge_base():
+    """仓库里跟踪的索引缓存必须就是真实知识库的索引。
+
+    只要哪次演练忘了重定向 INDEX_PATH，临时知识库（多一篇文档）重建出来的索引
+    就会把它覆盖掉，于是提交上去的索引与 `knowledge_base/` 对不上，
+    别人 clone 下来直接用的就是错的检索结果。
+    """
+    from kbqa.index import content_key
+
+    assert TRACKED_INDEX.is_file(), "索引缓存在仓库里应当是被跟踪的"
+    tracked = json.loads(TRACKED_INDEX.read_text(encoding="utf-8"))
+    expected = content_key(REPO / "knowledge_base")
+    assert tracked.get("key") == expected, (
+        "跟踪的索引与真实知识库内容键不一致：索引=%s 期望=%s；"
+        "在 starter/ 下跑一次 `python -m kbqa.rebuild`（不要设 INDEX_PATH）即可修正"
+        % (tracked.get("key"), expected)
+    )
+    assert len(tracked.get("docs", {})) == _count_docs(REPO / "knowledge_base")
 
 
 def test_new_doc_drill(real_retriever, tmp_path, monkeypatch):
@@ -44,14 +106,15 @@ def test_new_doc_drill(real_retriever, tmp_path, monkeypatch):
     # 1) 临时知识库副本 + 新增文档
     kb_dir = tmp_path / "knowledge_base"
     shutil.copytree(REPO / "knowledge_base", kb_dir)
+    before = _count_docs(kb_dir)
     (kb_dir / "notices" / "KB-099_临时停售通知.md").write_text(NEW_DOC, encoding="utf-8")
 
     settings = _settings_for(tmp_path, monkeypatch, kb_dir, REPO / "data")
     service = Service(settings)
 
-    # 2) 文档数跟着变
+    # 2) 文档数比基础值多一（不写死 35/36——知识库内容会变）
     health = service.health()
-    assert health["kb_docs"] == 36, health["kb_docs"]
+    assert health["kb_docs"] == before + 1, (before, health["kb_docs"])
 
     # 3) /api/retrieve 能找到新文档
     found = service.retrieve("S02 牛肉poke 临时停售 供应商 召回", top_k=5)
@@ -92,3 +155,26 @@ def test_data_swap_reflected_in_answers(real_retriever, tmp_path, monkeypatch):
     assert metrics["net_revenue"] == 999.0, metrics
     # 口径本身不变：清洗后的保留行数仍是 18290。
     assert service.tools.valid_sales_rows() == 18290
+
+
+def test_drill_script_leaves_worktree_and_tracked_index_untouched():
+    """跑一遍真正的演练脚本，确认它没动仓库里跟踪的索引、也没留下改动。
+
+    这是"演练隔离"的端到端验收：脚本自身会断言一次，这里从外部再断言一次，
+    避免脚本自检写错时把问题放过去。
+    """
+    before_digest = _digest(TRACKED_INDEX)
+    before_status = _git_status()
+
+    proc = subprocess.run(
+        [sys.executable, str(REPO / "eval" / "drill_new_doc.py")],
+        cwd=str(STARTER),
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+
+    assert proc.returncode == 0, "演练脚本失败：\n%s\n%s" % (proc.stdout[-2000:], proc.stderr[-1000:])
+    assert "演练成功" in proc.stdout, proc.stdout[-800:]
+    assert _digest(TRACKED_INDEX) == before_digest, "演练改动了 starter/.cache/index.json"
+    assert _git_status() == before_status, "演练在工作区留下了改动"
