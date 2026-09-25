@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import sys
 import time
 import traceback
 from collections import OrderedDict
@@ -29,6 +30,12 @@ PREVIEW_CHARS = 200
 TOOL_PREVIEW_CHARS = 400
 #: trace 里模型请求/响应的长度兜底（正常一轮远小于它）。
 MAX_LLM_TEXT = 200_000
+
+#: 单次清理最多删几个旧 trace 文件。
+#: 清理是善后动作，没必要一次删一大批；而且在受限环境里"一次删很多文件"
+#: 会被批量删除保护拦下（实测：239 个文件超过容量 200，一次要删 39 个 →
+#: 被拦 → 异常从 save() 冒到 /api/chat，后续请求全部 HTTP 500）。
+PRUNE_PER_SAVE = 5
 
 #: 工具调用刚记下、还不知道算不算被采纳时的占位原因（回答定稿后会被 replace）。
 PENDING_REASON = "待回答定稿后核对是否被采用"
@@ -248,6 +255,9 @@ class TraceStore:
         self.directory = Path(directory) if directory else None
         self._counter = 0
         self._seen: set[str] = set()
+        #: 最近一次落盘/清理的问题（None 表示没出过问题）。绝不因此让请求失败。
+        self.last_error: Optional[str] = None
+        self._noted = False
         if self.directory is not None:
             self.directory.mkdir(parents=True, exist_ok=True)
             self._load_existing()
@@ -283,8 +293,13 @@ class TraceStore:
             while len(self._data) > self.capacity:
                 self._data.popitem(last=False)
         if self.directory is not None:
-            self._write(payload)
-            self._prune()
+            # 落盘与清理都只是"顺带的调试能力"：任何一环出问题都不能让 /api/chat 失败。
+            # 这里刻意连 SystemExit 一起接住——有的沙箱用 sys.exit 阻断批量删除。
+            try:
+                self._write(payload)
+                self._prune()
+            except (Exception, SystemExit) as exc:  # noqa: BLE001 - 见上
+                self._note("保存/清理 trace 失败", exc)
 
     def get(self, trace_id: str) -> Optional[dict]:
         with self._lock:
@@ -327,13 +342,36 @@ class TraceStore:
             return
 
     def _prune(self) -> None:
+        """删掉超出容量的最旧 trace。**绝不抛异常**：删不掉就下次再说。
+
+        单次最多删 ``PRUNE_PER_SAVE`` 个，避免"一次删一大批"触发批量删除保护；
+        任何一个删除失败就停止本次清理，并把原因记进 ``last_error``（只打印一次）。
+        """
         if self.directory is None:
             return
-        files = sorted(
-            self.directory.glob("t-*.json"), key=lambda path: (path.stat().st_mtime, path.name)
-        )
-        for path in files[: max(0, len(files) - self.capacity)]:
+        try:
+            files = sorted(
+                self.directory.glob("t-*.json"), key=lambda path: (path.stat().st_mtime, path.name)
+            )
+        except OSError as exc:
+            self._note("列出待清理的 trace 失败", exc)
+            return
+        overflow = len(files) - self.capacity
+        if overflow <= 0:
+            return
+        for path in files[: min(overflow, PRUNE_PER_SAVE)]:
             try:
                 path.unlink()
-            except OSError:
-                continue
+            except (Exception, SystemExit) as exc:  # noqa: BLE001 - 见方法说明
+                self._note("删除旧 trace 失败（已跳过本次清理）", exc)
+                return
+
+    def _note(self, what: str, exc: BaseException) -> None:
+        """记下清理/落盘的问题，且**只打印一次**——既不打断请求，也不至于毫无痕迹。"""
+        self.last_error = "%s：%s: %s" % (what, type(exc).__name__, exc)
+        if not self._noted:
+            self._noted = True
+            print(
+                "[trace] %s（同类问题后续不再重复打印）" % self.last_error,
+                file=sys.stderr,
+            )

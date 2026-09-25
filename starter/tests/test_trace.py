@@ -208,3 +208,92 @@ def test_trace_objects_do_not_share_state():
     assert b.plan == {}
     assert b.tools == []
     assert all(step["step"] != "plan" for step in b.steps)
+
+
+# -- 清理旧 trace 绝不能把请求带崩（实测过的 500） ------------------------------
+
+
+def _make_store(tmp_path, capacity: int) -> TraceStore:
+    store = TraceStore(capacity=capacity, directory=tmp_path / "traces")
+    return store
+
+
+def _save_one(store: TraceStore, n: int) -> Trace:
+    trace = Trace("t-20260901-%04d" % n, question="q%d" % n)
+    trace.answer = {"type": "data"}
+    store.save(trace)
+    return trace
+
+
+def test_prune_failure_never_escapes_save(tmp_path, monkeypatch):
+    """删旧 trace 失败（例如环境里有批量删除保护）不能让 save() 抛出。
+
+    实测过的现场：var/traces 累计 239 个文件 > 容量 200，一次要删 39 个 →
+    被批量删除保护拦下 → 异常从 save() 冒到 /api/chat，之后每个请求都是 HTTP 500。
+    """
+    from pathlib import Path as _Path
+
+    store = _make_store(tmp_path, capacity=1)
+    for i in range(4):
+        _save_one(store, i)
+
+    def blocked(self, *args, **kwargs):
+        raise SystemExit("[safe-delete] 批量删除被拦住")
+
+    monkeypatch.setattr(_Path, "unlink", blocked)
+
+    trace = _save_one(store, 99)  # 不能抛
+    assert store.last_error, "失败了要留下痕迹"
+    assert "SystemExit" in store.last_error
+    # 记录本身仍要在内存里拿得到（落盘成功在前，清理失败在后）
+    assert store.get(trace.trace_id) is not None
+
+
+def test_prune_caps_deletions_per_call(tmp_path):
+    """单次清理最多删 PRUNE_PER_SAVE 个——"一次删一大批"正是会被拦下的形态。
+
+    注意只量**一次** `_prune()` 的删除量：TraceStore 在构造时（`_load_existing`）也会清理一次，
+    把两次混在一起算就测不出单次上限。
+    """
+    from kbqa.trace import PRUNE_PER_SAVE
+
+    directory = tmp_path / "traces"
+    bulk = TraceStore(capacity=1000, directory=directory)
+    for i in range(30):
+        _save_one(bulk, i)
+    assert len(list(directory.glob("t-*.json"))) == 30
+
+    small = TraceStore(capacity=2, directory=directory)
+    before = len(list(directory.glob("t-*.json")))
+
+    small._prune()  # 只调一次
+
+    after = len(list(directory.glob("t-*.json")))
+    removed = before - after
+    assert 0 < removed <= PRUNE_PER_SAVE, (before, after)
+    assert after > 2, "一次不该把超出容量的全清掉（还剩 %d 个）" % after
+
+
+def test_chat_is_still_200_when_prune_explodes(client, monkeypatch):
+    """端到端：清理炸了也不能变成 HTTP 500。"""
+    from kbqa.trace import TraceStore
+
+    calls = {"n": 0}
+
+    def boom(self):
+        calls["n"] += 1
+        raise SystemExit("[safe-delete] blocked")
+
+    monkeypatch.setattr(TraceStore, "_prune", boom)
+
+    resp = client.post(
+        "/api/chat", json={"session_id": "prune-boom", "question": "7 月整体的净营业额是多少？"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["answer"], body
+    assert body["trace_id"]
+    assert calls["n"] >= 1, "确认这次真的走了会抛异常的清理路径"
+    # 即使清理炸了，这条 trace 仍然应该能按 ID 取回
+    assert client.get("/api/trace/%s" % body["trace_id"]).status_code == 200
+
