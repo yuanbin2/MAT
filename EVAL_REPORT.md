@@ -274,7 +274,7 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py
 实证（在干净检出里造"提交里是过期索引"的场景）：① 新版守门失败 → ② 模拟更早用例先重建 →
 ③ **旧式（看工作区）检查假通过** → ④ 新版仍然失败。
 
-### 2. StepFun live 全量评测：跑了 5 轮，最终 100 / 100
+### 2. StepFun live 全量评测（模型 `step-5-preview`）：跑了 5 轮，最终 100 / 100
 
 此前只人工试问过四类问题。本轮用**现有 StepFun 配置**（模型 `step-5-preview`，
 `https://api.stepfun.com/step_plan/v1`）跑了完整的公开题库（55 题）与自拟题库（13 题），
@@ -326,7 +326,47 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py
 | 规划要文档依据，模型却一次都没检索 | T02 第 2 轮 `search_kb` 次数为 0，答案降级拒答还编出"金枪鱼poke碗"（KB-021 写的是鸡肉poke） | 无工具轮次收口前先替它检一次，只做一次（D39，`0cd3ab1`） |
 | `top_products` 的 limit 没有上界 | 模型要 `limit=20` → 65 个数字越过"证据卫生"的 60 个上限，D03/T03/X10 数字都对却丢分 | `MAX_TOP_PRODUCTS=10`，limit 先夹住（D40，`0cd3ab1`） |
 
-### 3. 界面上的 `**43,655 元**`
+### 3. 小米 MiMo live 全量评测（模型 `mimo-v2.5-pro`）：98 / 100 与 23 / 25
+
+换一个模型只想验证一件事：**同一份代码换个 brain 会怎样**。因此本轮**不改动任何代码**，
+只把 `LLM_BASE_URL/LLM_API_KEY/LLM_MODEL` 指向 MiMo 的 OpenAI 兼容端点重跑同一套题库，
+成绩如实记录、随后把结果脱敏入库。代码提交与上一节同为 `ce37e1c`。
+
+| 题库 | 总分 | 全绿 | 报告 | 脱敏逐题结果 |
+|---|---|---|---|---|
+| 公开（55 题） | **98.00 / 100.00** | 54/55 | `eval/reports/mimo_live_public_v1/` | **`docs/eval/mimo-live-public-v1.json`** |
+| 自拟（13 题） | **23.00 / 25.00** | 12/13 | `eval/reports/mimo_live_extra_v1/` | **`docs/eval/mimo-live-extra-v1.json`** |
+
+** MiMo 公开题库分类得分（满分 100）** —— 与 StepFun 的差异只在 doc 一类：
+
+| 类别 | MiMo | StepFun | | 类别 | MiMo | StepFun |
+|---|---|---|---|---|---|---|
+| metrics | 6.00 / 6.00 | 6.00 / 6.00 | | hybrid | 18.00 / 18.00 | 18.00 / 18.00 |
+| retrieval | 15.00 / 15.00 | 15.00 / 15.00 | | multi_turn | 9.00 / 9.00 | 9.00 / 9.00 |
+| data | 12.00 / 12.00 | 12.00 / 12.00 | | refusal | 8.00 / 8.00 | 8.00 / 8.00 |
+| **doc** | **14.00 / 16.00** | 16.00 / 16.00 | | safety | 9.00 / 9.00 | 9.00 / 9.00 |
+| version | 6.00 / 6.00 | 6.00 / 6.00 | | health | 1.00 / 1.00 | 1.00 / 1.00 |
+
+自拟题库分类：retrieval 4/4、data 4/4、doc 2/2、version 2/2、multi_turn 3/3、
+**refusal 2/4**、safety 6/6。
+
+**两道失分题（均先查 trace / `checks[]` 后记录，逐题证据在提交的 JSON 里）：**
+
+| 题号 | 问题 | 未通过检查 | 究竟发生了什么 |
+|---|---|---|---|
+| `C04`（公开，doc 2 分） | 三文鱼那次断供，供应商最后赔了我们多少钱？ | `fact_all`、`cite_all` | KB-022 检索到了，但只进了 **#1–#3** 片段；赔付金额 `CNY 8,600` 在 **第 6 块**。模型据此判断"知识库里没有具体金额"，转而引用 KB-021/KB-029（`t-20260901-0833`） |
+| `X07`（自拟，refusal 2 分） | 10 号那天卖了多少？ | `answer_type_in` | 题干缺门店与月份上下文，期望 `clarify`；模型自行假定为 `2026-08-10` 并直接给出 4,561 元的数（`t-20260901-0866`） |
+
+两题都是**模型行为差异**——检索到此为止没有再往下钻（C04）、该追问时没追问（X07）——
+**不是代码缺陷**：同一份代码下 StepFun 两题都通过。按约定本轮**不做任何针对性修改**，
+只把结果留档，便于后续换模型/调 prompt 时对比。
+
+**速度**：MiMo 单题 6–102 秒（V03 最慢 101.7s），公开题库整轮 13 分 43 秒；StepFun 同量级。
+
+**live 与 mock 各自独立**：两次 live 报告都**没有**跑 `check_regression.py`（那份基线是 mock 的），
+也不把 mock 的 100 分当作任何 live 成绩。
+
+### 4. 界面上的 `**43,655 元**`
 
 live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已改为安全的结构化渲染：
 新增 `frontend/src/markdown.ts`（解析 `**粗体**`、`` `代码` ``、`#` 标题、`-` 列表 → 输出 Block/Segment），
@@ -334,7 +374,7 @@ live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已
 （`grep -rn v-html src/` 无实际使用），模型回答属于外部输入，这条边界不松。
 落单的 `**`（奇数个）会被去掉，宁可少一处加粗也不让回答里冒出星号。
 
-### 4. 干净检出中的最终验证（`git worktree` 独立目录，`git status` 为空）
+### 5. 干净检出中的最终验证（`git worktree` 独立目录，`git status` 为空）
 
 | 项 | 命令 | 结果 |
 |---|---|---|
@@ -355,6 +395,7 @@ live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已
 | **mock（无 Key 降级）** | 不调模型，本地规划+检索+取数+模板作答 | **有**：公开题库 100/100、自拟题 25/25 | `eval/reports/clean_mock_public`、`eval/reports/clean_mock_extra` |
 | **模型桩件 / 预检** | 用假模型或打桩替掉模型，验证**接线与代码侧闸门** | **有**：预检 13 PASS + 1 未检查（P14） | `LLM_SETUP.md` 第 7 节、`tests/test_live_*.py`、`tests/test_llm_trace.py` |
 | **真实 live（StepFun）** | 连真实模型跑完整题库 | **有**：公开 **100.00/100**、自拟 25.00/25（模型 `step-5-preview`，提交 `0cd3ab1`） | `eval/reports/stepfun_live_public_v6/`、`eval/reports/stepfun_live_extra_v5/` |
+| **真实 live（小米 MiMo）** | 连真实模型跑完整题库（第二轮，未改代码） | **有**：公开 **98.00/100**、自拟 23.00/25（模型 `mimo-v2.5-pro`，提交 `ce37e1c`） | `eval/reports/mimo_live_public_v1/`、`eval/reports/mimo_live_extra_v1/` |
 | **真实 live（DeepSeek）** | 连评审配置的 DeepSeek 跑公开题库 | **仍未验证** | 见下 |
 
 **DeepSeek 仍未验证**：本机从未对 `https://api.deepseek.com` 跑过公开评测，没有任何 DeepSeek 分数。
@@ -363,9 +404,11 @@ live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已
 中性问题合成出的工具参数被 Plan 范围校验拒绝，`normal`/`slow` 只产出 refusal，没有素材断言
 “保持连接没弄坏正文”）。
 
-**StepFun 的成绩不能写成 DeepSeek 的成绩**：模型不同（`step-5-preview`）、接入前缀不同
-（`/step_plan/v1`）。它的 100 分说明"live 链路在真实模型上跑通了、并暴露出 5 个真 bug"，
-**不等于**评审配置 DeepSeek 的分数；DeepSeek 仍是"未验证"，拿 Key 后复跑同一套命令即可。
+**StepFun / MiMo 的成绩不能写成 DeepSeek 的成绩**：三者模型不同、接入端点也不同。
+这两份分数的意义是"live 链路在**多个真实模型**上都跑通了，并暴露出 5 个真 bug"，
+且给出了一条基线：**换模型不是免费的**——同一份代码从 StepFun 换到 MiMo，公开题库掉 2 分
+（doc 类的 C04）、自拟掉 2 分（ refusal 类的 X07），失分点都在模型的检索深度与追问判断上。
+DeepSeek 仍是"未验证"，拿 Key 后复跑同一套命令即可（`eval/run_eval.py --base-url …`）。
 
 第三关前置加固已把 live 的**取证闸门**（数字/引用只认本轮证据、检索内容去指令化、证据 ≤ 4096 字节）
 与**可观察性**（完整模型请求与原始响应入 trace、Key 脱敏）做成 13 个打桩单元测试，
