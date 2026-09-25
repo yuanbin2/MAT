@@ -569,8 +569,93 @@
 
 ---
 
+## 分层 10：第四关最后验收（StepFun live 实测暴露的两个真缺陷）
+
+### D34 plan 类模型"拿够了证据也不收口"，整题丢成拒答
+
+- **现象**：用 StepFun `step-5-preview` 跑公开题库时，有 6 题以
+  `tool_loop: 工具调用超过 4 轮仍未给出回答` 结束 → 整题变成拒答。
+- **先查 trace 再动手**（问题「三文鱼那次断供，供应商最后赔了我们多少钱？」）：
+  5 次模型调用、**10 次 `search_kb`**，每次都有命中（含供应商邮件那一篇），
+  关键词换了一轮又一轮（`salmon rejected delivery compensation credit note` 都试了），
+  但**从头到尾没有产出过任何答案**。所以根因不是"查不到"，是"不肯收口"。
+- **修复**：循环的最后一轮**不再传 `TOOLS`**，并补一句"请直接用已经拿到的工具结果作答，
+  不要再检索；不确定就明说无法确定"，强制它用手上已有的证据给答案；
+  trace 记 `final_round_tools_withheld`。轮次上限、预算与超时语义都不动。
+  保留 `tool_loop` 兜底：模型在没有工具的情况下还硬要调工具时仍然报错，不会无限循环。
+- **回归测试**：`starter/tests/test_live_final_round.py` 3 例（最后一轮 tools=None 且前面都有工具、
+  给出答案而非拒答、trace 有收口标记、命中的片段最终真的被引用且采纳状态正确、
+  撤工具时带了提醒语、无视撤工具时仍抛 tool_loop）。把 `live.py` 改回"每轮都给工具" → 1 例失败。
+
+### D35 清理旧 trace 失败把 `/api/chat` 打成 HTTP 500（本轮最严重的一个）
+
+- **现象**：StepFun live 公开题库跑出 **22.00/100**，分布极不自然——
+  不走模型的 metrics 6/6、retrieval 15/15、health 1/1 满分，**所有走 `/api/chat` 的类别全是 0**，
+  连本该由规划器直接拦下的 safety/refusal 也是 0。逐题看：33 题里没有 `answer`、`trace_id` 为 `None`。
+- **查证**：读后端日志拿到堆栈 ——
+  `service.chat → trace.save → TraceStore._prune → path.unlink → (受限环境的) safe-delete shim
+  → _check_bulk_delete_guard → SystemExit`。
+  `var/traces` 累计 **239 个文件 > 容量 200**，`_prune` 一次要删 39 个 → 被批量删除保护拦下。
+  抛出的不是 `OSError`，所以原来的 `except OSError` 接不住，异常从 `save()` 冒到接口层。
+- **一个更值得记的点**：`_write` 里早就写了"落盘失败不能让问答失败"，`_prune` 却漏了同样的保护——
+  同一个文件里两种标准。**这 22 分不是模型成绩，是这个崩溃的产物**，必须先修它再谈 live 分数。
+- **修复**：`_prune` 单次最多删 `PRUNE_PER_SAVE = 5` 个（"一次删一大批"正是会被拦下的形态），
+  任一步失败就停止本次清理且**绝不抛异常**；`save()` 把落盘+清理一起包住，连 `SystemExit` 也接住；
+  失败记进 `TraceStore.last_error` 且**只打印一次**（不打断请求，也不至于毫无痕迹）。
+- **回归测试**：`tests/test_trace.py` 新增 3 例（删文件抛 `SystemExit` 时 `save()` 不抛、
+  trace 仍能按 ID 取回、`last_error` 有原因；单次 `_prune()` 删除量 ≤ 5 且不会一次清空；
+  端到端 `POST /api/chat` 在清理必然抛异常时仍 200 且 `trace_id` 可取）。
+  把 `_prune`/`save` 还原成旧写法 → 3 例全部失败（端到端那例直接 `SystemExit`）。
+
+### D36 索引守门可被测试顺序掩盖（守门自身的问题）
+
+- **现象**：守门测试读的是**工作区**的 `starter/.cache/index.json`。同一次 pytest 里只要有更早的
+  用例重建过索引（例如用临时知识库跑 `kbqa.rebuild`），工作区就被刷成最新的，
+  于是"工作区 == 真实知识库"会**假通过**，把提交里那份过期缓存放过去——测试顺序能决定结果。
+- **实测证明**（在临时干净检出里做，不污染主仓库）：造一份过期索引并提交 →
+  ① 新版守门（读 `git show HEAD:`）失败；② 模拟更早用例就地重建后，**旧式检查假通过**；
+  ③ 新版守门仍然失败。三步都留下了输出。
+- **修复**：新增 `test_committed_index_matches_real_knowledge_base`（只看 git 里的 blob，
+  与顺序无关）、`test_working_tree_index_matches_real_knowledge_base`、
+  `test_tracked_index_has_no_uncommitted_changes`；把判定抽成 `_index_problems()` 并单独测正反例。
+  CI 在 rebuild 之后加 `git diff --exit-code -- starter/.cache/index.json`：重建让被跟踪索引发生变化
+  即失败，并打印修法。
+- **顺带核对**：在**未设 `INDEX_PATH`** 的情况下按当前知识库重建，文件与提交版本**字节完全一致**
+  （sha256 `79ea5cf1bc24a786…`、262302 字节、`git diff` 为空），所以本次无需修改索引文件——
+  这一点也是测出来的，不是推断。
+
+---
+
+### D37 账号侧 403 被当成"服务抖动"，看不出该怎么办
+
+- **现象**：StepFun live 公开题库跑出 **36.00/100**，27 道失分题的**全部**原因都是
+
+  ```
+  HTTP 403：real-name verification is required for your free step plan
+  before calling this API.
+  ```
+
+  当时回答里写的是"模型服务这次没有正常返回（接口返回错误码 403）…**可以稍后重试**"——
+  既看不出要去哪儿处理，还会让人一遍遍重试。
+- **判断依据**：状态码 403 且正文含实名特征串，两者**同时**满足才算账号侧限制。
+  普通 403（`forbidden`）仍是 `http_error`；429 带同样字串也不算——避免过度归类。
+- **修复**：`kbqa/llm.py` 新增 `is_account_blocked(status, detail)`，命中时
+  `LLMError.kind` 改为 `account_blocked`（trace 记录里也带 `kind`）；
+  `service._reason_cn` 补话术"账号未通过模型服务商的实名认证，服务商拒绝调用（重试无效）"，
+  拒答文案对这类错误改成"这是账号侧限制，重试无效，需要到服务商控制台处理"，不再说"可以稍后重试"。
+  `account_blocked` 不在重试名单内（`403 ∉ RETRYABLE_STATUS`）。
+- **回归测试**：`tests/test_llm_trace.py` 新增 4 例（403+实名 → `account_blocked` 且
+  `retryable=False`；普通 403 不被误判；判据必须两条同时满足；端到端 `Service.chat`
+  给出 refusal 且说明重试无效、不出现"可以稍后重试"）。
+- **边界**：这类限制只能由账号持有者在服务商控制台解除（人脸实名），代码侧无解，
+  所以本轮 live 分数**不代表模型真实水平**，也没有拿 mock 基线去判定 live 回归。
+
+---
+
 ## 尚未解决 / 已知边界
 
+- **StepFun 账号未实名，live 分数被 403 压着**（公开 36.00/100、自拟 12.00/25，失分全为 403）。
+  解除后重跑即可；在此之前不要把这两个分数当成模型能力，也不要与 mock 的 100 分混用。
 - 无 Key 的 mock 降级模式公开题库满分；**评审配置（DeepSeek）的真实 live 未验证**，
   `eval/llm_gateway.py preflight` 为 13 项通过 + P14「未检查」（原因见 `LLM_SETUP.md` 第 7 节）。
   live 链路本身已用 StepFun `step-5-preview` 真机跑通（数据/文档/混合/追问四类问答均正确），

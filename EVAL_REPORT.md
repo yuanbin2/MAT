@@ -242,23 +242,125 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py
 > （放在项目外的 `.tools/make/`，不入库），测试用 `MAKE_BIN=` 指过去；
 > **CI 的 ubuntu runner 自带 make**，不设置也会跑这些用例。
 
+## 第四关最终验收（本轮）
+
+> 本节只报告**实测跑出来的数字**。live 与 mock 分开列，不互相代替。
+
+### 1. 提交中的 `starter/.cache/index.json`：核对结论是「本来就是正确的」
+
+在未设置 `INDEX_PATH` 的前提下按当前 `knowledge_base/` 重建，结果**与原文件字节完全一致**：
+
+| 项 | 值 |
+|---|---|
+| 重建命令 | `cd starter && python -m kbqa.rebuild`（显式 `env -u INDEX_PATH -u ENV_FILE`） |
+| 重建前后 sha256 | `79ea5cf1bc24a78614df346a4b4b273cffb7cd69232fd4edf0aa2addf634a6a4` → 同值 |
+| 大小 | 262302 字节 → 同值 |
+| `git diff -- starter/.cache/index.json` | **空** |
+| 内容键 / 文档数 | `b0da151dbd8b…` / 35 篇，与真实知识库算出的值一致 |
+
+所以**没有改动索引文件**：提交里那份就是当前知识库的索引，用一个"重建后必然产生 diff"的假改动去
+凑一个提交反而会引入错误。真正要修的是**守门方式**（见下）。
+
+守门改进后，测试运行顺序再也不能靠"先重建一次"来掩盖提交里的旧缓存：
+
+| 守门 | 判据 | 能否被顺序掩盖 |
+|---|---|---|
+| 新增 `test_committed_index_matches_real_knowledge_base` | 读 `git show HEAD:starter/.cache/index.json` 的 blob | **不能**（只看提交，不看工作区） |
+| 新增 `test_tracked_index_has_no_uncommitted_changes` | 被跟踪索引不得有未提交差异 | 不能 |
+| 保留 `test_working_tree_index_matches_real_knowledge_base` | 工作区那份也要合格 | **能**（更早的用例重建过就假通过） |
+| 新增 `test_index_guard_rejects_stale_index` | 守门逻辑本身的反例 | — |
+| CI 新增一步 | rebuild 后 `git diff --exit-code -- starter/.cache/index.json` | 不能 |
+
+实证（在干净检出里造"提交里是过期索引"的场景）：① 新版守门失败 → ② 模拟更早用例先重建 →
+③ **旧式（看工作区）检查假通过** → ④ 新版仍然失败。
+
+### 2. StepFun live 全量评测：跑完了，但被账号侧限制卡住
+
+此前只人工试问过四类问题。本轮用**现有 StepFun 配置**（模型 `step-5-preview`）跑了
+完整的公开题库（55 题）与自拟题库（13 题），逐题 `report.json` 已保留。
+
+| 轮次 | 题库 | 总分 | 全绿 | 代码提交 | 报告 |
+|---|---|---|---|---|---|
+| v1（修复前） | 公开题库 | **22.00 / 100.00** | 21/55 | `abcea85` 之前 | `eval/reports/stepfun_live_public/` |
+| **v2（修复后）** | 公开题库 | **36.00 / 100.00** | 28/55 | `1beba2e` | `eval/reports/stepfun_live_public_v2/` |
+| v2 | 自拟题库 | **12.00 / 25.00** | 7/13 | `5e8ec1e` | `eval/reports/stepfun_live_extra/` |
+
+**这 36 分不是模型能力，也不代表真实水平——27 道失分题全是同一个原因：**
+
+```
+HTTP 403：real-name verification is required for your free step plan
+before calling this API. please complete face verification at
+https://account.stepfun.com/security?action=realname
+```
+
+- 失分题号（公开）：`D01–D06`、`C01–C08`、`V01–V03`、`H01–H06`、`T01–T03`、`S01`（共 27 题）
+- 失分题号（自拟）：`X05`、`X06`、`X07`、`X09`、`X10`、`X11`（共 6 题）
+- 逐题 trace 例：`D01=t-20260901-0357`、`C01=t-20260901-0363`、`H01=t-20260901-0377`、
+  `X05=t-20260901-0403`（完整清单在对应 `report.json` 里）
+- 不经过模型的三类（`metrics` 6/6、`retrieval` 15/15、`health` 1/1）满分；
+  `refusal` 8/8、`safety` 6/9 也基本正常——**凡是走 `/api/chat` 需要调模型的题，一律 403**
+- 遇到 403 时系统没有编造数字，而是给出结构化拒答，这是设计内的正确行为
+
+**只有账号持有者能解除**（人脸实名，需到 StepFun 控制台完成）。解除后重跑命令：
+
+```bash
+cd starter && .venv/Scripts/python.exe -m uvicorn kbqa.server:app --port 8001
+python eval/run_eval.py --base-url http://localhost:8001 --questions eval/public_questions.jsonl --timeout 180
+```
+
+> **不能用 mock 基线判定 live 回归**：两者的题目得分不可比（live 现在被 403 压着），
+> 因此本轮**没有**对 live 报告跑 `check_regression.py`，也不会把 mock 的 100 分当成 live 成绩。
+> 本报告中出现的所有 live 分数都只来自上表的实测运行。
+
+#### 顺带修掉的两个真 bug（都是这次全量跑才暴露的）
+
+| 缺陷 | 症状 | 修复 |
+|---|---|---|
+| `TraceStore._prune()` 清理旧 trace 时抛异常 | `var/traces` 累计 239 个 > 容量 200，一次删 39 个触发批量删除保护，异常从 `save()` 冒到 `/api/chat` → **之后每个请求都是 HTTP 500**。v1 的 22 分就是这个崩溃的产物 | 单次最多删 5 个、失败即停、`save()` 连 `SystemExit` 一并接住（`1beba2e`） |
+| `step-5-preview` 不肯收口 | 6 题以 `tool_loop` 结束（查 trace：检索到正确文档后一直换关键词搜，把 4 轮工具预算耗光，从头到尾没产出答案） | 最后一轮不传 `TOOLS`，强制用已有证据作答（`abcea85`） |
+
+修完后 v1 里的 6 次 `tool_loop` 在 v2 中已不再出现（v2 的失败全部是 403）。
+
+### 3. 界面上的 `**43,655 元**`
+
+live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已改为安全的结构化渲染：
+新增 `frontend/src/markdown.ts`（解析 `**粗体**`、`` `代码` ``、`#` 标题、`-` 列表 → 输出 Block/Segment），
+由 `RichText.vue` 用 `<strong>`/`<code>` 与普通插值画出来。**全程不生成 HTML 字符串、不使用 `v-html`**
+（`grep -rn v-html src/` 无实际使用），模型回答属于外部输入，这条边界不松。
+落单的 `**`（奇数个）会被去掉，宁可少一处加粗也不让回答里冒出星号。
+
+### 4. 干净检出中的最终验证（`git worktree` 独立目录，`git status` 为空）
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| ① 索引守门（单独跑） | `pytest tests/test_kb_drill.py -q -k index -v` | **7 passed** |
+| ② 全部后端测试 | `pytest tests -q` | **219 passed** |
+| ③ 前端构建 | `npm run build` | 通过（vue-tsc + vite，6.66s） |
+| ④-a mock 公开题库 | `run_eval.py --base-url http://127.0.0.1:8004 --questions eval/public_questions.jsonl` | **100.00 / 100.00**（55/55） |
+| ④-a 回归门禁（全量严格） | `check_regression.py --report …/report.json` | 无回归，**退出码 0** |
+| ④-b mock 自拟题库 | `run_eval.py --questions eval/extra_questions.jsonl` | **25.00 / 25.00**（13/13） |
+| ⑤ 新增文档演练 | `drill_new_doc.py` | **13 / 13 PASS**；演练前后 `starter/.cache/index.json` sha256 均为 `79ea5cf1bc24…`，演练后 `git status` **仍为空** |
+
 ## 关于 live 模式：三种状态分开报告
 
 **不要把 mock 成绩写成 live。** 三者的实际状态如下：
 
 | 状态 | 是什么 | 本次是否有结果 | 证据 |
 |---|---|---|---|
-| **mock（无 Key 降级）** | 不调模型，本地规划+检索+取数+模板作答 | **有**：公开题库 100/100、自拟题 25/25 | `eval/reports/stage3_final`、`eval/reports/extra` |
+| **mock（无 Key 降级）** | 不调模型，本地规划+检索+取数+模板作答 | **有**：公开题库 100/100、自拟题 25/25 | `eval/reports/clean_mock_public`、`eval/reports/clean_mock_extra` |
 | **模型桩件 / 预检** | 用假模型或打桩替掉模型，验证**接线与代码侧闸门** | **有**：预检 13 PASS + 1 未检查（P14） | `LLM_SETUP.md` 第 7 节、`tests/test_live_*.py`、`tests/test_llm_trace.py` |
-| **真实 live** | 连真实模型跑公开题库 | **未验证**：本机没有评审用的 DeepSeek Key | 见下 |
+| **真实 live（StepFun）** | 连真实模型跑完整题库 | **跑了，但被账号限制卡住**：公开 36.00/100、自拟 12.00/25，失分全部是 403 实名 | `eval/reports/stepfun_live_public_v2/`、`eval/reports/stepfun_live_extra/` |
+| **真实 live（DeepSeek）** | 连评审配置的 DeepSeek 跑公开题库 | **仍未验证** | 见下 |
 
-**真实 live 未验证**：本机从未对 `https://api.deepseek.com` 跑过公开评测，因此没有任何真实 live 分数。
-预检的 **P14 是「未检查」，不是通过**（原因见 `LLM_SETUP.md` 第 7 节：预检的中性问题合成出的工具参数
-被 Plan 范围校验拒绝，`normal`/`slow` 只产出 refusal，没有素材断言“保持连接没弄坏正文”）。
+**DeepSeek 仍未验证**：本机从未对 `https://api.deepseek.com` 跑过公开评测，没有任何 DeepSeek 分数。
+`LLM_SETUP.md` 里的接入步骤、`eval/llm_gateway.py preflight`、以及 live 侧的 13 个打桩单元测试都就绪，
+拿到 Key 后可直接复跑。预检的 **P14 是「未检查」，不是通过**（原因见 `LLM_SETUP.md` 第 7 节：预检的
+中性问题合成出的工具参数被 Plan 范围校验拒绝，`normal`/`slow` 只产出 refusal，没有素材断言
+“保持连接没弄坏正文”）。
 
-> 另记一次**非评审配置**的真实模型验证（StepFun `step-5-preview`，通过 `/step_plan/v1` 前缀接入）：
-> 数据题、文档题、混合题、多轮追问均正确，并因此发现并修复了一个真 bug（问经营数字时不该引用周报估算，
-> `4e7231e`）。这**不是** DeepSeek 的分数，只在 `AI_USAGE.md` 里作为过程记录。
+**StepFun 的成绩不能写成 DeepSeek 的成绩**：模型不同（`step-5-preview`）、接入前缀不同
+（`/step_plan/v1`）、且当前被账号侧 403 限制压着。上表的 StepFun 分数只用于说明
+「全量跑通了、失败原因是什么、修了哪些真 bug」。
 
 第三关前置加固已把 live 的**取证闸门**（数字/引用只认本轮证据、检索内容去指令化、证据 ≤ 4096 字节）
 与**可观察性**（完整模型请求与原始响应入 trace、Key 脱敏）做成 13 个打桩单元测试，
