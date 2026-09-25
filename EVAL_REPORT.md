@@ -274,52 +274,55 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py
 实证（在干净检出里造"提交里是过期索引"的场景）：① 新版守门失败 → ② 模拟更早用例先重建 →
 ③ **旧式（看工作区）检查假通过** → ④ 新版仍然失败。
 
-### 2. StepFun live 全量评测：跑完了，但被账号侧限制卡住
+### 2. StepFun live 全量评测：跑了 5 轮，最终 100 / 100
 
-此前只人工试问过四类问题。本轮用**现有 StepFun 配置**（模型 `step-5-preview`）跑了
-完整的公开题库（55 题）与自拟题库（13 题），逐题 `report.json` 已保留。
+此前只人工试问过四类问题。本轮用**现有 StepFun 配置**（模型 `step-5-preview`，
+`https://api.stepfun.com/step_plan/v1`）跑了完整的公开题库（55 题）与自拟题库（13 题），
+逐题 `report.json` 全部保留在 `eval/reports/` 下。
+
+**账号在 14:30 前后恢复，成绩因此分两段：**
 
 | 轮次 | 题库 | 总分 | 全绿 | 代码提交 | 报告 |
 |---|---|---|---|---|---|
-| v1（修复前） | 公开题库 | **22.00 / 100.00** | 21/55 | `abcea85` 之前 | `eval/reports/stepfun_live_public/` |
-| **v2（修复后）** | 公开题库 | **36.00 / 100.00** | 28/55 | `1beba2e` | `eval/reports/stepfun_live_public_v2/` |
-| v2 | 自拟题库 | **12.00 / 25.00** | 7/13 | `5e8ec1e` | `eval/reports/stepfun_live_extra/` |
+| v1 | 公开 | 22.00 / 100.00 | 21/55 | `abcea85` 之前 | `stepfun_live_public/` |
+| v2 | 公开 | 36.00 / 100.00 | 28/55 | `1beba2e` | `stepfun_live_public_v2/` |
+| v2 | 自拟 | 12.00 / 25.00 | 7/13 | `5e8ec1e` | `stepfun_live_extra/` |
+| **v3（账号恢复后）** | 公开 | **95.00 / 100.00** | 53/55 | `5e8ec1e` | `stepfun_live_public_v3/` |
+| v3 | 自拟 | 25.00 / 25.00 | 13/13 | `5e8ec1e` | `stepfun_live_extra_v2/` |
+| v4 | 公开 | 96.00 / 100.00 | 53/55 | 修 D38/D39 后 | `stepfun_live_public_v4/` |
+| v5 | 公开 | 96.50 / 100.00 | 53/55 | 扩展收窄后 | `stepfun_live_public_v5/` |
+| **v6（最终）** | **公开** | **100.00 / 100.00** | **55/55** | **`0cd3ab1`** | **`stepfun_live_public_v6/`** |
+| **v5（最终）** | **自拟** | **25.00 / 25.00** | **13/13** | **`0cd3ab1`** | **`stepfun_live_extra_v5/`** |
 
-**这 36 分不是模型能力，也不代表真实水平——27 道失分题全是同一个原因：**
+> **v1/v2 那两轮不作数**：当时账号被 `HTTP 403 real-name verification is required`
+> 挡着，凡是走 `/api/chat` 的题一律拿不到模型输出——27 道失分题（公开 `D01–D06`、`C01–C08`、
+> `V01–V03`、`H01–H06`、`T01–T03`、`S01`；自拟 `X05`、`X06`、`X07`、`X09`、`X10`、`X11`）
+> 全是这一个原因，trace 例 `D01=t-20260901-0357`、`X05=t-20260901-0403`。
+> 遇到 403 时系统没有编造数字，而是给出结构化拒答（设计内的正确行为）。
+> 账号实名是 14:30 前后由账号持有者完成的，之后 95 → 96 → 96.5 → **100**。
 
-```
-HTTP 403：real-name verification is required for your free step plan
-before calling this API. please complete face verification at
-https://account.stepfun.com/security?action=realname
-```
+**最终 v6 的分类得分（公开题库，满分 100）**
 
-- 失分题号（公开）：`D01–D06`、`C01–C08`、`V01–V03`、`H01–H06`、`T01–T03`、`S01`（共 27 题）
-- 失分题号（自拟）：`X05`、`X06`、`X07`、`X09`、`X10`、`X11`（共 6 题）
-- 逐题 trace 例：`D01=t-20260901-0357`、`C01=t-20260901-0363`、`H01=t-20260901-0377`、
-  `X05=t-20260901-0403`（完整清单在对应 `report.json` 里）
-- 不经过模型的三类（`metrics` 6/6、`retrieval` 15/15、`health` 1/1）满分；
-  `refusal` 8/8、`safety` 6/9 也基本正常——**凡是走 `/api/chat` 需要调模型的题，一律 403**
-- 遇到 403 时系统没有编造数字，而是给出结构化拒答，这是设计内的正确行为
+| 类别 | 得分 | | 类别 | 得分 |
+|---|---|---|---|---|
+| 指标接口 metrics | 6.00 / 6.00 | | 数据+文档 hybrid | 18.00 / 18.00 |
+| 检索质量 retrieval | 15.00 / 15.00 | | 多轮追问 multi_turn | 9.00 / 9.00 |
+| 纯数据 data | 12.00 / 12.00 | | 拒答 refusal | 8.00 / 8.00 |
+| 纯文档 doc | 16.00 / 16.00 | | 安全 safety | 9.00 / 9.00 |
+| 版本与时效 version | 6.00 / 6.00 | | 健康检查 health | 1.00 / 1.00 |
 
-**只有账号持有者能解除**（人脸实名，需到 StepFun 控制台完成）。解除后重跑命令：
+**live 与 mock 各自独立**：live 报告**没有**跑 `check_regression.py`（那份基线是 mock 的），
+也不会把 mock 的 100 分当成 live 成绩——上表每个数字都来自对应报告目录里的实测运行。
 
-```bash
-cd starter && .venv/Scripts/python.exe -m uvicorn kbqa.server:app --port 8001
-python eval/run_eval.py --base-url http://localhost:8001 --questions eval/public_questions.jsonl --timeout 180
-```
-
-> **不能用 mock 基线判定 live 回归**：两者的题目得分不可比（live 现在被 403 压着），
-> 因此本轮**没有**对 live 报告跑 `check_regression.py`，也不会把 mock 的 100 分当成 live 成绩。
-> 本报告中出现的所有 live 分数都只来自上表的实测运行。
-
-#### 顺带修掉的两个真 bug（都是这次全量跑才暴露的）
+#### 顺带修掉的五个真 bug（都是"跑全量"才暴露的）
 
 | 缺陷 | 症状 | 修复 |
 |---|---|---|
-| `TraceStore._prune()` 清理旧 trace 时抛异常 | `var/traces` 累计 239 个 > 容量 200，一次删 39 个触发批量删除保护，异常从 `save()` 冒到 `/api/chat` → **之后每个请求都是 HTTP 500**。v1 的 22 分就是这个崩溃的产物 | 单次最多删 5 个、失败即停、`save()` 连 `SystemExit` 一并接住（`1beba2e`） |
-| `step-5-preview` 不肯收口 | 6 题以 `tool_loop` 结束（查 trace：检索到正确文档后一直换关键词搜，把 4 轮工具预算耗光，从头到尾没产出答案） | 最后一轮不传 `TOOLS`，强制用已有证据作答（`abcea85`） |
-
-修完后 v1 里的 6 次 `tool_loop` 在 v2 中已不再出现（v2 的失败全部是 403）。
+| `TraceStore._prune()` 抛异常 | `var/traces` 239 个 > 容量 200，一次删 39 个触发批量删除保护，异常冒到 `/api/chat` → **之后每个请求都是 HTTP 500**。v1 的 22 分就是这个崩溃的产物 | 单次最多删 5 个、失败即停、`save()` 连 `SystemExit` 一并接住（`1beba2e`） |
+| `step-5-preview` 不肯收口 | 6 题以 `tool_loop` 结束（检索到正确文档后一直换关键词搜，耗光 4 轮预算） | 最后一轮不传 `TOOLS`，强制用已有证据作答（`abcea85`） |
+| 答案落在兄弟片段，被"一篇只占一格"挤掉 | H03「冷萃乌龙茶首月达标了吗」→ 目标 900 杯在 KB-028 第 3 块，4 次检索都没带回；T02「供应商赔了多少」→ `CNY 8,600` 在 KB-022 第 6 块，模型只拿到第 1、7 块 | 问答链路放宽到每篇 2 格 + 补命中片段的相邻块（D38，`0cd3ab1`） |
+| 规划要文档依据，模型却一次都没检索 | T02 第 2 轮 `search_kb` 次数为 0，答案降级拒答还编出"金枪鱼poke碗"（KB-021 写的是鸡肉poke） | 无工具轮次收口前先替它检一次，只做一次（D39，`0cd3ab1`） |
+| `top_products` 的 limit 没有上界 | 模型要 `limit=20` → 65 个数字越过"证据卫生"的 60 个上限，D03/T03/X10 数字都对却丢分 | `MAX_TOP_PRODUCTS=10`，limit 先夹住（D40，`0cd3ab1`） |
 
 ### 3. 界面上的 `**43,655 元**`
 
@@ -349,7 +352,7 @@ live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已
 |---|---|---|---|
 | **mock（无 Key 降级）** | 不调模型，本地规划+检索+取数+模板作答 | **有**：公开题库 100/100、自拟题 25/25 | `eval/reports/clean_mock_public`、`eval/reports/clean_mock_extra` |
 | **模型桩件 / 预检** | 用假模型或打桩替掉模型，验证**接线与代码侧闸门** | **有**：预检 13 PASS + 1 未检查（P14） | `LLM_SETUP.md` 第 7 节、`tests/test_live_*.py`、`tests/test_llm_trace.py` |
-| **真实 live（StepFun）** | 连真实模型跑完整题库 | **跑了，但被账号限制卡住**：公开 36.00/100、自拟 12.00/25，失分全部是 403 实名 | `eval/reports/stepfun_live_public_v2/`、`eval/reports/stepfun_live_extra/` |
+| **真实 live（StepFun）** | 连真实模型跑完整题库 | **有**：公开 **100.00/100**、自拟 25.00/25（模型 `step-5-preview`，提交 `0cd3ab1`） | `eval/reports/stepfun_live_public_v6/`、`eval/reports/stepfun_live_extra_v5/` |
 | **真实 live（DeepSeek）** | 连评审配置的 DeepSeek 跑公开题库 | **仍未验证** | 见下 |
 
 **DeepSeek 仍未验证**：本机从未对 `https://api.deepseek.com` 跑过公开评测，没有任何 DeepSeek 分数。
@@ -359,8 +362,8 @@ live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已
 “保持连接没弄坏正文”）。
 
 **StepFun 的成绩不能写成 DeepSeek 的成绩**：模型不同（`step-5-preview`）、接入前缀不同
-（`/step_plan/v1`）、且当前被账号侧 403 限制压着。上表的 StepFun 分数只用于说明
-「全量跑通了、失败原因是什么、修了哪些真 bug」。
+（`/step_plan/v1`）。它的 100 分说明"live 链路在真实模型上跑通了、并暴露出 5 个真 bug"，
+**不等于**评审配置 DeepSeek 的分数；DeepSeek 仍是"未验证"，拿 Key 后复跑同一套命令即可。
 
 第三关前置加固已把 live 的**取证闸门**（数字/引用只认本轮证据、检索内容去指令化、证据 ≤ 4096 字节）
 与**可观察性**（完整模型请求与原始响应入 trace、Key 脱敏）做成 13 个打桩单元测试，
