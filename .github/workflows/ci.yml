@@ -9,6 +9,9 @@ jobs:
   backend-and-eval:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      # 显式关掉 .env 读取：CI 必须是纯 mock，不请求任何付费模型。
+      ENV_FILE: ''
     steps:
       - uses: actions/checkout@v4
 

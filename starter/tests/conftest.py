@@ -13,6 +13,10 @@ from pathlib import Path
 
 import pytest
 
+# 测试不读仓库根的 .env：否则本机配了 Key 就会把测试带进 live 模式，
+# 既慢又可能真的去请求付费模型。要测 .env 解析请直接调 parse_env_file/load_env_files。
+os.environ["ENV_FILE"] = ""
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 

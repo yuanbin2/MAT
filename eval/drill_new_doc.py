@@ -117,6 +117,9 @@ def main() -> int:
     env = dict(os.environ)
     for key in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
         env.pop(key, None)  # 强制 mock，不请求任何付费模型
+    # 光删环境变量不够：服务启动时会从仓库根的 .env 把 LLM_* 补回来，
+    # 所以还要显式关掉 .env 读取（ENV_FILE= 表示一个字都不读）。
+    env["ENV_FILE"] = ""
     env.update({"KB_DIR": str(kb_dir), "DATA_DIR": str(data_dir), "VAR_DIR": str(var_dir)})
 
     port = free_port()
