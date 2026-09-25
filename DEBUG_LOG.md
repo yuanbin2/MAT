@@ -369,6 +369,65 @@
 
 ---
 
+## 分层 7：第四关可调试性（承接 D16，补全而非新缺陷）
+
+> 这一层是**补全上一轮的 trace 范围**，不是新发现的线上缺陷。红测证据只对实际跑过的部分声称，
+> 代码走查得到的部分如实标注。
+
+### D24 mock 路径的工具调用没有进 trace；live 的工具步骤只有参数没有结果
+
+- **现象（承接 D16）**：D16 给 trace 补了「完整模型请求/响应」，但**工具侧不完整**：
+  `Answerer._call` 有 `evidence`、没有 `trace` 参数，mock 路径的步骤只有
+  `plan / search / answer_mock / response`，**看不到任何工具调用**；live 的 `trace.step("tool", …)`
+  只写 `{tool, params}`，**没有结果、没有耗时、没有是否采纳**。
+- **验证（代码走查）**：`grep -rn "_call(" starter/kbqa/` 时 `Answerer._call(self, evidence, name, **params)`
+  签名里没有 trace；`live.py` 的 `trace.step("tool", {"tool": name, "params": params}, started=started)`
+  没有把 result 写进去。
+- **修复**：`_call(self, evidence, name, trace=None, **params)` 记录工具步骤（工具名/最终参数/有界结果摘要/
+  耗时/`accepted=True`/`entered="data_evidence"`），14 个调用点补 `trace=trace`
+  （`hybrid._zero_days`/`_baseline` 顺带加上 trace 形参）；live 的工具步骤改为
+  `trace.tool(...)`，区分 `ok`/`error`/`rejected`，拒绝时带 `reject_reason`、**绝不标成已采纳**。
+- **回归测试**：`tests/test_trace.py::test_mock_chat_trace_has_real_tool_steps`
+  （断言 mock 也有工具步骤、有 `result_preview`/`took_ms`/`entered`）、
+  `test_live_orchestration.py::test_wrong_scope_tool_result_not_used_as_evidence`
+  （断言被拒绝的调用 `status=rejected`、`accepted=False`、带原因）。
+
+### D25 TraceStore 只在进程内、编号跨重启会重复
+
+- **现象**：旧 `TraceStore` 只保留进程内最多 200 条，编号是 `t-{业务日期}-{进程内计数}`；
+  重启后计数从 1 重新开始，**新记录会复用旧编号**，且重启前的记录再也找不回来（现场调试要复现失败题就断了）。
+- **验证（代码走查）**：`TraceStore.__init__` 只有 `self._counter = 0`，没有读磁盘；
+  `new_id` 直接 `self._counter += 1`。
+- **修复**：`TraceStore(capacity, directory)` 落盘 `var/traces/<trace_id>.json`；启动时扫磁盘已有编号
+  把计数推到最大值，`new_id` 循环到未用过的编号；内存未命中回磁盘读；启动与每次写入后按容量剪枝；
+  落盘失败不影响问答。`Settings.traces_dir` 跟着 `var/` 一起被 gitignore。
+- **回归测试**：`tests/test_trace.py`（跨重启按 ID 找回、重启后编号不重复、容量上限、
+  启动剪枝、落盘无 Key、旧 ID 404）。
+
+### D26 没有回归门禁：`run_eval.py` 失分也返回 0
+
+- **现象**：评测脚本写完 `report.json` 就返回 0，CI 拿不到“有没有退步”的信号。
+- **验证**：`grep -n "sys.exit\|return 0\|returncode" eval/run_eval.py`——正常跑完不按得分退出。
+- **修复**：新增 `eval/check_regression.py` 对比跟踪的 mock 基线（`eval/baseline_mock.json`），
+  比较总分/分类/逐题通过状态，退步或漏题或坏报告 → 非零退出，并输出题号、类别、失败检查项与 trace_id；
+  `.github/workflows/ci.yml` 串起测试 → 重建 → 起服务 → 评测 → 回归判定 → 前端构建。
+- **有效性实测（不是嘴上说）**：把 `C01` 的成绩人为改低 → 退出码 1 且报出
+  `[逐题] C01（doc）…失败检查：citations；trace_id=t-20260901-0007`；恢复后退出码 0。
+- **回归测试**：`eval/tests/test_check_regression.py`（分数下降/漏题/分类退步/坏报告/缺键 →
+  非零；无变化与新增题 → 0；CLI 退出码；`--update` 剪枝）。
+
+### D27 新增文档演练暴露的顺序问题：重建与服务抢 clean.db
+
+- **现象**：演练脚本先起服务、再改文档、再 `kbqa.rebuild`，重建报
+  `PermissionError: [WinError 32] 另一个程序正在使用此文件: …\var\clean.db`（服务持有 SQLite 连接）。
+- **验证**：演练脚本第一次运行输出 `FAIL kbqa.rebuild 退出码=1`，堆栈指向 `cleaning.build_clean_db`
+  的 `target.unlink()`。
+- **修复**：演练流程改为「起服务确认基线 → **停服务** → 加文档 → 重建 → 重启 → 验证」，
+  并把这一步写进 `DEBUGGING.md` 第 5 节。
+- **修复后**：演练 **11/11 PASS**（kb_docs 35→36、index_key 变化、retrieve/chat/trace 都能定位新文档）。
+
+---
+
 ## 尚未解决 / 已知边界
 
 - 无 LLM Key 的 mock 降级模式已满分；live 模式（配置真实模型后）未在本机对真实 API 跑过，

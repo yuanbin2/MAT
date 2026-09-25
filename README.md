@@ -7,7 +7,8 @@
 - 业务口径以知识库 **KB-001《指标口径手册 v3》** 为准（现行版，2026-05-01 起生效）。
 - 系统的"今天"固定为 **2026-09-01**，与真实电脑日期无关。
 - 作业原文（任务说明）保留在 `docs/ASSIGNMENT.md`，接口契约见 `docs/API_CONTRACT.md`。
-- 模型接入说明见 **`LLM_SETUP.md`**，混合问答的真实演示流程见 **`DEMO.md`**。
+- 模型接入说明见 **`LLM_SETUP.md`**，混合问答的真实演示流程见 **`DEMO.md`**，
+  现场调试流程见 **`DEBUGGING.md`**（从一个 trace_id 走到根因与修复）。
 
 ## 快速开始（3 步）
 
@@ -54,9 +55,10 @@ npm run dev               # 前端：http://localhost:5173，/api 自动代理�
 
 ```bash
 cd starter
-make test                 # 后端测试（151 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
+make test                 # 后端测试（167 个）：清洗口径、日期边界、清洗规则、分词/切块/安全、
                           # 只读 SQL 闸门、SQLite 内部对象、业务表白名单、有界读取、证据体积、
-                          # live 数字取证、search_kb 继承 Plan、trace 脱敏、loader doc_id 等
+                          # live 数字取证、search_kb 继承 Plan、trace 记录与持久化、
+                          # loader doc_id、新增文档/换数据演练等
 ```
 
 > `run_sql` 只接受单条只读查询（`SELECT`/`WITH … FROM`），拒绝 `sqlite_master`/`sqlite_schema`/
@@ -75,6 +77,35 @@ python3 eval/run_eval.py --base-url http://localhost:8000 --questions eval/publi
 ```
 
 公开题库（无 Key 的 mock 降级模式）实测满分 100/100，分数与运行命令见 `EVAL_REPORT.md`；逐缺陷根因见 `DEBUG_LOG.md`。
+
+## 回归门禁
+
+`eval/run_eval.py` 失分也返回退出码 0，不能直接当门禁；用 `eval/check_regression.py` 对比仓库里跟踪的 mock 基线：
+
+```bash
+python eval/run_eval.py --base-url http://localhost:8000 --questions eval/public_questions.jsonl
+python eval/check_regression.py --report report.json      # 退步/漏题/坏报告 → 非零退出
+```
+
+输出版式：`[逐题] C01（doc）失败检查 citations；trace_id=t-20260901-0007`。
+`.github/workflows/ci.yml` 已经串起来：后端 pytest → rebuild → 起服务等健康检查 → 公开题库评测 →
+回归判定 → 前端 `npm ci` + `npm run build`；**不需要任何真实 Key**，也不请求付费模型。
+基线 `eval/baseline_mock.json`（题库 `eval/public_questions.jsonl`、`llm_mode=mock`、55 题满分）。
+
+另外有两套自拟题与演练：
+
+```bash
+python eval/run_eval.py --base-url http://localhost:8000 --questions eval/extra_questions.jsonl  # 13 题，25/25
+cd starter && .venv/Scripts/python ../eval/drill_new_doc.py                                      # 新增文档演练，11/11
+```
+
+## 可调试性
+
+- 每次回答都有 `trace_id`；`GET /api/trace/{trace_id}` 给出规划、检索命中与过滤、**真实工具调用与结果**、
+  完整模型请求/响应、耗时与错误。
+- 前端「AI 助手」页可按 trace_id 打开**调试面板**，按排查顺序展示上面这些信息；见 `DEBUGGING.md`。
+- trace 有界（最近 200 条）、脱敏（落盘前擦掉 Key）、持久化在 `starter/var/traces/`（已 gitignore），
+  跨重启编号不重复、旧 ID 仍 404。
 
 ## 模型接入（live / mock）
 

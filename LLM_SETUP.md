@@ -64,10 +64,25 @@
 
 ## 6. 可观察性
 
-- `GET /api/trace/{trace_id}` 返回完整链路：规划、检索命中与过滤原因、每个工具调用与结果、
-  **发给模型的完整请求（含每一轮消息与工具定义）与模型原始响应**、每步耗时与错误。
-- **Key 脱敏是全链路的**：`llm.redact_secret()` 覆盖所有抛出路径（超时 / 网络 / 非法 JSON 回显 / HTTP 错误码），
+`GET /api/trace/{trace_id}` 返回一次回答的完整链路，字段与实际记录一一对应：
+
+- `plan`：原问题 / 补全问题 / 意图 / 日期区间 / 门店 / 商品 / 指标 / 检索查询；
+- `retrievals[]`：每次检索的 `query`、约束（`as_of` / `store_id` / `year` / `window` / `historical`）、
+  命中片段（`doc_id` / `chunk_id` / `score` / `padded` 补位标识 / `kind` / 120 字 `preview`）、
+  以及被过滤片段的 `doc_id` 与 `reason`；
+- `tools[]`：每次真实执行的工具/检索——`tool`、`params`、`status`（`ok`/`error`/`rejected`）、
+  `took_ms`、`accepted` 是否进入回答依据、`entered`（`data_evidence`/`citations`）、
+  被拒绝时的 `reject_reason`、有界结果摘要（`result_preview` + `result_bytes`）；
+  mock 路径同样记录（过去没有工具步骤）；
+- `llm_calls[]`：live 模式下逐轮**完整请求（含每一轮消息与工具定义）与模型原始响应**、
+  `finish_reason`、HTTP 状态、错误与 `took_ms`；mock 模式下为空且 `model_called=false`
+  （面板显示「本次未调用模型」）；
+- `answer`：回答类型、预览、引用摘要、证据条数；`steps[]`：每步发生顺序与耗时（未测量到写 `null`）；
+  `errors[]`：类型、消息、堆栈；
+- **Key 脱敏是全链路的**：所有抛出路径（超时 / 网络 / 非法 JSON 回显 / HTTP 错误码）先脱敏，
   `TraceStore.save` 落盘前再递归脱敏一次。实测非法 JSON 回显 Key 时，`/api/trace` 与回答里都不出现 Key。
+- trace 有界（默认保留最近 200 条）且持久化在 `starter/var/traces/`（已 gitignore），
+  跨重启编号不重复、旧 ID 返回 404；落盘失败不影响问答（内存里仍留着）。
 - 也可以把 `LLM_BASE_URL` 指向 `python3 eval/llm_gateway.py proxy --upstream https://api.deepseek.com --log llm_traffic.jsonl`
   打印的地址；日志只记 Authorization 长度、不记值（`llm_traffic.jsonl` 已在 `.gitignore`）。
 

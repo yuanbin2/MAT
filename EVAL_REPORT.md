@@ -166,9 +166,70 @@
 > 说明：live 桩件用打桩替掉模型，验证的是**代码侧的取证闸门与脱敏**，不代表真实模型的回答质量；
 > 真实模型分数需配置 Key 后另跑（见下方“关于 live 模式”）。
 
-## 关于 live 模式
+## 第四关：可调试性验收
 
-未配置真实 LLM Key，因此未提供 live 分数；以上分数即无 Key 降级模式的完整结果。
+第四关补齐 trace、调试面板、回归门禁、自拟题与演练。全部在 mock 模式实测，**不需要 Key、不请求付费模型**。
+
+### 1. mock 公开评测与回归门禁
+
+- 运行命令：
+  ```bash
+  python eval/run_eval.py --base-url http://127.0.0.1:8000 --questions eval/public_questions.jsonl
+  python eval/check_regression.py --report report.json --baseline eval/baseline_mock.json
+  ```
+- **总分 100.00 / 100**（55 题全绿）；回归判定退出码 0。
+- 基线 `eval/baseline_mock.json`：题库 `eval/public_questions.jsonl`、`llm_mode=mock`、55 题满分
+  （只保留可比较的业务结果，去掉生成时间/地址/回答原文）。
+- **门禁有效性实测**：把 `C01` 人为改成未通过 → 判定退出码 **1**，输出
+  `[逐题] C01（doc）通过/得分退步（2.0 -> 0.0）；失败检查：citations；trace_id=t-20260901-0007`；
+  恢复后退出码回到 0。
+
+### 2. 后端测试与前端构建
+
+- 后端 `pytest tests -q` → **167 passed**（新增 `tests/test_trace.py` 13 例、`tests/test_kb_drill.py` 2 例）。
+- 前端 `npm run build` → 通过（vue-tsc 类型检查 + vite 构建）。
+- 回归脚本自测 `cd eval/tests && python -m unittest test_check_regression -v` → **10 passed**。
+
+### 3. 自拟题（公开题未充分覆盖的风险）
+
+```bash
+python eval/run_eval.py --base-url http://127.0.0.1:8000 --questions eval/extra_questions.jsonl
+```
+
+- **25.00 / 25.00**（13 题全绿）。范围：问题改写（X01–X04）、追问隔离（X06）、
+  时间歧义反问（X07）、无数据拒答（X08）、门店+闭区间精确值（X09）、
+  经营数字 vs 周报估算（X10，`cite_none KB-050`）、历史版本（X11，引用 KB-010）、
+  提示注入改写说法（X12/X13）。
+
+### 4. 现场新增文档演练
+
+```bash
+cd starter && .venv/Scripts/python ../eval/drill_new_doc.py
+```
+
+- **11 / 11 PASS**：起服务（kb_docs=35）→ 停服务 → 加入 KB-099 → `python -m kbqa.rebuild` → 重启
+  → `kb_docs 35→36`、`index_key b0da151dbd8b→f9b2ceda3da6` → `/api/retrieve` 命中 KB-099
+  → `/api/chat` 引用 KB-099 → `/api/trace` 里能看到新命中。全程在临时副本，不碰正式知识库与索引缓存。
+- 另在 `tests/test_kb_drill.py` 里做等价断言（新增文档后检索/问答/引用/trace 跟着变；
+  替换数据后 metrics 取自新数据、口径仍 18290）。
+
+## 关于 live 模式：三种状态分开报告
+
+**不要把 mock 成绩写成 live。** 三者的实际状态如下：
+
+| 状态 | 是什么 | 本次是否有结果 | 证据 |
+|---|---|---|---|
+| **mock（无 Key 降级）** | 不调模型，本地规划+检索+取数+模板作答 | **有**：公开题库 100/100、自拟题 25/25 | `eval/reports/stage3_final`、`eval/reports/extra` |
+| **模型桩件 / 预检** | 用假模型或打桩替掉模型，验证**接线与代码侧闸门** | **有**：预检 13 PASS + 1 未检查（P14） | `LLM_SETUP.md` 第 7 节、`tests/test_live_*.py`、`tests/test_llm_trace.py` |
+| **真实 live** | 连真实模型跑公开题库 | **未验证**：本机没有评审用的 DeepSeek Key | 见下 |
+
+**真实 live 未验证**：本机从未对 `https://api.deepseek.com` 跑过公开评测，因此没有任何真实 live 分数。
+预检的 **P14 是「未检查」，不是通过**（原因见 `LLM_SETUP.md` 第 7 节：预检的中性问题合成出的工具参数
+被 Plan 范围校验拒绝，`normal`/`slow` 只产出 refusal，没有素材断言“保持连接没弄坏正文”）。
+
+> 另记一次**非评审配置**的真实模型验证（StepFun `step-5-preview`，通过 `/step_plan/v1` 前缀接入）：
+> 数据题、文档题、混合题、多轮追问均正确，并因此发现并修复了一个真 bug（问经营数字时不该引用周报估算，
+> `4e7231e`）。这**不是** DeepSeek 的分数，只在 `AI_USAGE.md` 里作为过程记录。
 
 第三关前置加固已把 live 的**取证闸门**（数字/引用只认本轮证据、检索内容去指令化、证据 ≤ 4096 字节）
 与**可观察性**（完整模型请求与原始响应入 trace、Key 脱敏）做成 13 个打桩单元测试，
