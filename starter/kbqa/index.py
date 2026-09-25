@@ -12,7 +12,7 @@ from typing import Optional
 
 from .aliases import AliasTable, build_alias_table
 from .chunker import CHUNKER_VERSION, Chunk, chunk_documents
-from .loader import Document, load_knowledge_base
+from .loader import Document, kb_files_sorted, load_knowledge_base, read_text_normalized
 from .tokenizer import TOKENIZER_VERSION, tokenize
 
 INDEX_VERSION = "bm25-4"
@@ -25,15 +25,18 @@ def content_key(kb_dir: Path) -> str:
 
     契约 §8 要求“索引必须能感知知识库的变化”，所以除了版本号，还把目录里
     每个文件的相对路径与内容哈希进去：换文档、改文档都会让键变化、缓存失效。
+
+    跨平台一致性：文件按 ``as_posix()`` 字符串稳定排序（不用 ``Path`` 的大小写
+    相关排序），内容哈希的是**统一换行后的文本**（不是原始字节）——否则 Windows
+    的 CRLF 与 Ubuntu 的 LF 会算出两把不同的键。
     """
     digest = hashlib.sha256()
     digest.update(("%s|%s|%s\n" % (INDEX_VERSION, CHUNKER_VERSION, TOKENIZER_VERSION)).encode())
-    for path in sorted(kb_dir.rglob("*")):
-        if not path.is_file() or path.name.startswith("."):
-            continue
+    for path in kb_files_sorted(kb_dir):
         digest.update(path.relative_to(kb_dir).as_posix().encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        # 与入库同一条路（read_text_normalized）：哈希和索引认同一份文本。
+        digest.update(read_text_normalized(path).encode("utf-8"))
         digest.update(b"\n")
     return digest.hexdigest()
 

@@ -91,6 +91,33 @@ def decode_bytes(raw: bytes, path: Path, warnings: list[str]) -> str:
             return raw.decode("utf-8", errors="replace")
 
 
+def read_text_normalized(path: Path, warnings: Optional[list[str]] = None) -> str:
+    """读文本并统一换行：``\\r\\n`` 与孤立的 ``\\r`` 一律折成 ``\\n``。
+
+    这是跨平台一致性的关键入口：Windows 工作区（git 默认 autocrlf）把同一批
+    文件检成 CRLF，Ubuntu 检成 LF。若哈希与入库各自读原始字节，两个系统会得到
+    两把不同的内容键、两份不同的索引。所以**哈希（content_key）和入库
+    （Document.text）都必须走这里**，只认折成 ``\\n`` 之后的文本。
+    """
+    raw = path.read_bytes()
+    return decode_bytes(raw, path, warnings or []).replace("\r\n", "\n").replace("\r", "\n")
+
+
+def kb_files_sorted(kb_dir: Path) -> list[Path]:
+    """知识库文件按**跨平台稳定**的相对路径排序。
+
+    直接 ``sorted(rglob)`` 比较的是 ``Path`` 对象：Windows 的大小写不敏感与
+    Linux 的大小写敏感会让顺序不同（纯数字/ASCII 名碰巧一致，但规范上不能依赖）。
+    这里改成按 ``as_posix()`` 字符串排——顺序只由文件名本身决定，与操作系统无关。
+    """
+    files = [
+        path
+        for path in kb_dir.rglob("*")
+        if path.is_file() and not path.name.startswith(".")
+    ]
+    return sorted(files, key=lambda path: path.relative_to(kb_dir).as_posix())
+
+
 _HTML_SCRIPT = re.compile(r"<(script|style)\b.*?</\1>", re.I | re.S)
 _HTML_TAG = re.compile(r"<[^>]+>")
 
@@ -185,8 +212,9 @@ def _title_from_body(text: str, fallback: str) -> str:
 def load_document(path: Path) -> Optional[Document]:
     """读一个文件。不是知识库文档（没有 KB 编号）时返回 None。"""
     warnings: list[str] = []
-    raw = path.read_bytes()
-    text = decode_bytes(raw, path, warnings)
+    # 统一换行后再入库：否则 Windows 的 CRLF 会一直留在 Document.text 里，
+    # 跟着写进索引的 texts 字段，Ubuntu 重建就得不到同一份内容。
+    text = read_text_normalized(path, warnings)
     suffix = path.suffix.lower()
     fmt = {".md": "md", ".markdown": "md", ".txt": "txt"}.get(suffix, "html")
 
@@ -256,7 +284,7 @@ def load_knowledge_base(kb_dir: Path) -> tuple[list[Document], list[str]]:
     seen: dict[str, Path] = {}
     if not kb_dir.exists():
         return documents, ["知识库目录不存在：%s" % kb_dir]
-    for path in sorted(kb_dir.rglob("*")):
+    for path in kb_files_sorted(kb_dir):
         if not path.is_file() or path.name.startswith("."):
             continue
         if path.suffix.lower() not in SUPPORTED_SUFFIXES:
