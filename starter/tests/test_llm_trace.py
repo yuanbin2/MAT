@@ -208,3 +208,95 @@ def test_service_trace_masks_key_on_llm_error(monkeypatch):
     # 但失败原因仍要可见（可观察性不能因为脱敏而丢失）
     assert trace["errors"], "错误必须留在 trace 里"
     assert "合法 JSON" in json.dumps(trace, ensure_ascii=False)
+
+
+# -- 账号侧限制要被单独认出来（实测过的 403）--------------------------------
+
+REALNAME_BODY = json.dumps(
+    {
+        "error": {
+            "message": (
+                "real-name verification is required for your free step plan "
+                "before calling this API. please complete face verification at "
+                "https://account.stepfun.com/security?action=realname"
+            ),
+            "code": "real_name_required",
+        }
+    }
+)
+
+
+def test_403_realname_is_classified_as_account_blocked(monkeypatch):
+    """403 + 实名提醒必须归为 account_blocked，而不是笼统的 http_error。
+
+    实测现场：StepFun 免费额度要求先实名，于是**每一道**走模型的题都拿到 403，
+    回答里只显示"接口返回错误码 403"，看不出该怎么办。
+    """
+    _patch(monkeypatch, 403, REALNAME_BODY)
+    client = llm.LLMClient("https://api.example.test", "sk-test", "test-model")
+
+    with pytest.raises(llm.LLMError) as info:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert info.value.kind == "account_blocked", info.value.kind
+    assert info.value.status == 403
+    # 重试没有意义，绝不能进重试名单
+    assert info.value.retryable is False
+
+
+def test_other_403_stays_http_error(monkeypatch):
+    """不是实名原因的 403 不能被误判。"""
+    _patch(monkeypatch, 403, json.dumps({"error": {"message": "forbidden", "code": "x"}}))
+    client = llm.LLMClient("https://api.example.test", "sk-test", "test-model")
+
+    with pytest.raises(llm.LLMError) as info:
+        client.chat([{"role": "user", "content": "hi"}])
+
+    assert info.value.kind == "http_error", info.value.kind
+
+
+def test_is_account_blocked_only_when_both_match():
+    from kbqa.llm import is_account_blocked
+
+    assert is_account_blocked(403, "real-name verification is required")
+    assert is_account_blocked(403, "请先完成实名认证")
+    assert not is_account_blocked(403, "forbidden")
+    assert not is_account_blocked(429, "real-name verification is required")
+
+
+def test_refusal_text_says_retry_is_useless_for_account_block(monkeypatch):
+    """端到端：账号被拦时，回答要说明"重试无效"，而不是"可以稍后重试"。
+
+    账号侧限制会波及每一道走模型的题；如果话术还是"可以稍后重试"，
+    跑完一整轮题库也只会得到一堆无意义的拒答。
+    """
+    from dataclasses import replace
+
+    from kbqa import service as service_module
+    from kbqa.config import load_settings
+    from kbqa.service import Service
+
+    class BlockedClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def chat_with_retry(self, messages, tools, budget=None, on_call=None):
+            raise llm.LLMError(
+                "account_blocked", "real-name verification is required", status=403
+            )
+
+    monkeypatch.setattr(service_module, "LLMClient", BlockedClient)
+
+    settings = replace(
+        load_settings(),
+        llm_base_url="https://api.example.test/v1",
+        llm_api_key="sk-fake-for-test",
+        llm_model="fake-model",
+    )
+    service = Service(settings)
+    out = service.chat("s-acct-block", "7 月整体的净营业额是多少？")
+
+    assert out["answer_type"] == "refusal"
+    assert "实名" in out["answer"], out["answer"]
+    assert "可以稍后重试" not in out["answer"], "账号侧限制不该再让人白等"
+

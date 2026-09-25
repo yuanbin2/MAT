@@ -235,9 +235,15 @@ class Service:
             detail = redact_secret(exc.detail, self.settings.llm_api_key)
             trace.error("llm", exc)
             trace.step("answer_live_failed", {"kind": exc.kind, "detail": detail}, started=started)
+            # 账号侧限制说"可以稍后重试"是误导——重试多少次结果都一样。
+            tail = (
+                "这是账号侧限制，重试无效，需要到服务商控制台处理。"
+                if exc.kind == "account_blocked"
+                else "可以稍后重试；"
+            )
             return Answer(
                 answer="模型服务这次没有正常返回（%s），为了不给出没有依据的数字，这个问题先不回答。"
-                "可以稍后重试；失败的真实原因记在 trace 里。" % _reason_cn(exc),
+                "%s失败的真实原因记在 trace 里。" % (_reason_cn(exc), tail),
                 answer_type="refusal",
                 notes=["live 模式失败：%s" % detail],
             )
@@ -263,6 +269,8 @@ def _reason_cn(exc: LLMError) -> str:
     mapping = {
         "timeout": "调用超时",
         "http_error": "接口返回错误码 %s" % (exc.status or ""),
+        # 账号侧限制：说清楚"不是暂时故障，重试也没用"，否则会一直误判为服务抖动
+        "account_blocked": "账号未通过模型服务商的实名认证，服务商拒绝调用（重试无效）",
         "empty_content": "返回了空回答",
         "length": "输出额度被思考耗尽",
         "content_filter": "被内容过滤拦截",

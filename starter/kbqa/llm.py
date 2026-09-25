@@ -22,6 +22,8 @@ GOOD_FINISH = ("stop", "tool_calls")
 #: 这几类是暂时性的，值得重试一次。
 RETRYABLE_STATUS = (429, 500, 503)
 RETRYABLE_KINDS = ("empty_content", "insufficient_system_resource", "transport")
+#: 账号侧限制的特征串：这类 403 重试多少次都一样，只能去控制台处理。
+ACCOUNT_BLOCK_MARKERS = ("real-name verification", "realname", "real_name", "实名")
 #: trace 里请求/响应的安全兜底长度；正常一轮远小于它，不会触发截断。
 MAX_TRACE_TEXT = 200_000
 
@@ -149,9 +151,14 @@ class LLMClient:
         if response.status_code != 200:
             # 400/401/402/422/429/500/503 都在这里变成结构化错误。
             detail = self._mask(_error_detail(response))
-            record.update(error="http_%d" % response.status_code, detail=detail)
+            kind = "http_error"
+            if is_account_blocked(response.status_code, detail):
+                # 实测过：免费额度要求先实名，403 正文写着 real-name verification。
+                # 这不是代码问题也不是暂时故障——重试没用，得说清楚去哪儿处理。
+                kind = "account_blocked"
+            record.update(error="http_%d" % response.status_code, detail=detail, kind=kind)
             self._note(on_call, record, started)
-            raise LLMError("http_error", detail, status=response.status_code)
+            raise LLMError(kind, detail, status=response.status_code)
 
         # 服务繁忙时正文前面会有空行，json 解析要能跳过。
         try:
@@ -227,6 +234,19 @@ class LLMClient:
 def _preview(text: str, limit: int = 4000) -> str:
     text = text or ""
     return text if len(text) <= limit else text[:limit] + "…（截断，共 %d 字）" % len(text)
+
+
+def is_account_blocked(status: Optional[int], detail: str) -> bool:
+    """判断是不是"账号侧限制"——与代码和暂时性故障都无关，重试无效。
+
+    实测到的形态：`HTTP 403 ... real-name verification is required for your free
+    step plan before calling this API`。这类失败会波及**每一道**走模型的题，
+    如果不单独识别，面板/回答里只会显示"接口返回错误码 403"，看不出该怎么办。
+    """
+    if status != 403:
+        return False
+    lowered = (detail or "").lower()
+    return any(marker.lower() in lowered for marker in ACCOUNT_BLOCK_MARKERS)
 
 
 def _error_detail(response: httpx.Response) -> str:
