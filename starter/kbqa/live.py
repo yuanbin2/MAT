@@ -75,8 +75,22 @@ class LiveEngine:
             remaining = deadline - time.perf_counter()
             if remaining < 10:
                 raise LLMError("budget", "整体耗时接近 /api/chat 的时限，已停止调用模型")
+            # 最后一轮**不再给工具**：实测 plan 类模型（StepFun step-5-preview）会一直
+            # 换着关键词检索、拿够了证据也不收口，把轮次耗光后白丢这道题。
+            # 到点把工具撤掉，强制它用手上已有的证据作答。
+            last_round = round_index >= MAX_TOOL_ROUNDS
+            if last_round:
+                trace.step("final_round_tools_withheld", {"round": round_index})
+                # 再点它一句：模型刚从"检索模式"里出来，不提醒容易答成"我再查一下"。
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "请直接用已经拿到的工具结果作答，不要再检索。"
+                        "如果现有结果不足以确定答案，就明确说无法确定。",
+                    }
+                )
             reply = self.client.chat_with_retry(
-                messages, TOOLS, budget=remaining, on_call=trace.llm
+                messages, None if last_round else TOOLS, budget=remaining, on_call=trace.llm
             )
             if not reply.tool_calls:
                 return self._finalise(plan, reply.content, evidence, retrieved_docs, trace)
