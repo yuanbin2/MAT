@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { fetchChat, fetchHealth } from '../api'
 import type { AnswerType, Citation, DataEvidence, HealthInfo } from '../types'
+import RichText from './RichText.vue'
 import TracePanel from './TracePanel.vue'
 
 type MsgState = 'ok' | 'loading' | 'error'
@@ -239,7 +240,7 @@ onMounted(() => {
             </template>
 
             <template v-else>
-              <div class="chat__answer">{{ msg.text }}</div>
+              <div class="chat__answer"><RichText :text="msg.text" /></div>
 
               <div class="chat__meta" v-if="msg.answerType">
                 <span class="chat__badge" :class="`chat__badge--${msg.answerType}`">
@@ -454,7 +455,6 @@ onMounted(() => {
 }
 
 .chat__answer {
-  white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.7;
 }
