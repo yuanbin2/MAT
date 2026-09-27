@@ -171,4 +171,46 @@ const hint = computed(() => {
   font-size: var(--fs-xs);
   color: var(--vermilion);
 }
+
+/* —— 移动端：字段竖排全宽，按钮成行，输入 16px 防 iOS 聚焦缩放 —— */
+@media (max-width: 680px) {
+  .filter {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-3);
+    padding: var(--sp-4);
+  }
+
+  .filter__field,
+  .filter__field--store {
+    width: 100%;
+    min-width: 0;
+    flex: none;
+  }
+
+  .filter__input {
+    width: 100%;
+    min-width: 0;
+    height: 44px;
+    font-size: 16px;
+  }
+
+  .filter__sep {
+    display: none;
+  }
+
+  .filter__actions {
+    margin-left: 0;
+  }
+
+  .filter__actions .btn {
+    flex: 1;
+    height: 44px;
+  }
+
+  .filter__hint {
+    position: static;
+    order: 10;
+  }
+}
 </style>

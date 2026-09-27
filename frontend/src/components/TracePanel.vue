@@ -774,5 +774,36 @@ details summary {
   .kv__k {
     width: 60px;
   }
+
+  /* 头部允许换行：标题 + 三个操作按钮在 390px 下放不下 */
+  .drawer__head {
+    padding: var(--sp-3) var(--sp-4);
+    flex-wrap: wrap;
+  }
+  .drawer__title {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .drawer__head-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .mini {
+    height: 32px; /* 触摸目标 */
+  }
+  .drawer__lookup {
+    padding: var(--sp-3) var(--sp-4);
+  }
+  .drawer__input {
+    height: 40px;
+    font-size: 16px;
+  }
+  .btn {
+    height: 40px;
+  }
+  .drawer__body {
+    padding: var(--sp-3) var(--sp-4) var(--sp-8);
+    padding-bottom: max(var(--sp-8), env(safe-area-inset-bottom));
+  }
 }
 </style>

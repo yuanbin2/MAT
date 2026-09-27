@@ -56,6 +56,7 @@ defineProps<{
 .top__body {
   padding-top: var(--sp-2);
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .top__table {
@@ -149,5 +150,18 @@ defineProps<{
 
 .top__loading {
   display: block;
+}
+
+/* —— 移动端：保留横向滚动（管理后台表格惯例），收紧内边距加大行高 —— */
+@media (max-width: 680px) {
+  .top__table th {
+    padding: 0 var(--sp-2) var(--sp-2);
+  }
+  .top__table td {
+    padding: var(--sp-2) var(--sp-2);
+  }
+  .name {
+    max-width: 168px;
+  }
 }
 </style>

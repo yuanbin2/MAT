@@ -200,9 +200,21 @@ const cards = computed(() => {
 @media (max-width: 680px) {
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-3);
   }
   .metric--lead {
     grid-column: span 2;
+  }
+  .metric {
+    padding: var(--sp-3);
+  }
+  /* 窄卡下数值降级，避免长金额被省略号截断 */
+  .metric__value {
+    font-size: 22px;
+    margin-top: var(--sp-2);
+  }
+  .metric--lead .metric__value {
+    font-size: 24px;
   }
 }
 </style>

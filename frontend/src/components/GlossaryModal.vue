@@ -171,4 +171,27 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   font-size: var(--fs-sm);
   line-height: 1.75;
 }
+
+/* —— 移动端：底部 Bottom Sheet 形态 —— */
+@media (max-width: 680px) {
+  .glossary {
+    padding: 0;
+    align-items: end;
+  }
+
+  .glossary__panel {
+    width: 100%;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    max-height: 86vh;
+    max-height: 86dvh;
+    overflow-y: auto;
+  }
+
+  .glossary__body {
+    padding-bottom: max(var(--sp-5), env(safe-area-inset-bottom));
+  }
+}
 </style>

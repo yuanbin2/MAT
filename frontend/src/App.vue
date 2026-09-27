@@ -50,6 +50,14 @@ let requestSeq = 0
 
 const glossaryOpen = ref(false)
 
+// —— 移动端导航抽屉 ——
+const navOpen = ref(false)
+
+function onNavigate(target: 'overview' | 'assistant') {
+  view.value = target
+  navOpen.value = false
+}
+
 const dataPeriod = computed(() => ({
   start: dataQuality.value?.data_period.start ?? null,
   end: dataQuality.value?.data_period.end ?? null,
@@ -164,10 +172,23 @@ onMounted(loadMeta)
 
 <template>
   <div class="layout">
-    <Sidebar :active="view" @navigate="view = $event" />
+    <Sidebar :active="view" :mobile-open="navOpen" @navigate="onNavigate" />
+
+    <!-- 移动端抽屉打开时的遮罩：点击任意处关闭 -->
+    <div
+      class="scrim"
+      :class="{ 'scrim--show': navOpen }"
+      aria-hidden="true"
+      @click="navOpen = false"
+    ></div>
 
     <div class="main">
       <header class="topbar">
+        <button class="topbar__menu" aria-label="打开导航菜单" @click="navOpen = true">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+            <path d="M3 5.5h14M3 10h14M3 14.5h14" />
+          </svg>
+        </button>
         <div class="topbar__lead">
           <h1 class="topbar__title">{{ view === 'overview' ? '经营总览' : 'AI 助手' }}</h1>
           <div v-if="view === 'overview'" class="topbar__sub">
@@ -252,7 +273,28 @@ onMounted(loadMeta)
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* 移动端地址栏收展时高度随动态视口，避免底部被裁 */
   overflow: hidden;
+}
+
+/* —— 移动端遮罩 —— */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(15, 55, 51, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms var(--ease);
+}
+.scrim--show {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (min-width: 901px) {
+  .scrim {
+    display: none;
+  }
 }
 
 /* —— 顶栏 —— */
@@ -295,6 +337,36 @@ onMounted(loadMeta)
   height: 3px;
   border-radius: 50%;
   background: var(--rule-strong);
+}
+
+/* —— 汉堡按钮（仅移动端显示） —— */
+.topbar__menu {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+.topbar__menu svg {
+  width: 18px;
+  height: 18px;
+}
+
+.topbar__menu:active {
+  background: var(--pine-tint);
+  color: var(--pine);
+  border-color: var(--pine);
 }
 
 .glossary-btn {
@@ -423,26 +495,44 @@ onMounted(loadMeta)
   }
 }
 
-@media (max-width: 1100px) {
-  .topbar,
+@media (max-width: 900px) {
+  .topbar {
+    padding: var(--sp-3) var(--sp-4);
+    gap: var(--sp-3);
+  }
+  .topbar__menu {
+    display: inline-flex;
+  }
+  /* 让标题跟随汉堡按钮靠左（助手页没有右侧按钮时不能被推到最右） */
+  .topbar__lead {
+    flex: 1;
+    min-width: 0;
+  }
+  .topbar__title {
+    font-size: 18px;
+  }
   .content {
-    padding-left: var(--sp-5);
-    padding-right: var(--sp-5);
+    padding: var(--sp-4) var(--sp-4) var(--sp-8);
   }
 }
 
 @media (max-width: 760px) {
-  .topbar {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--sp-3);
-  }
   .topbar__sub {
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
   }
   .topbar__dot {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .glossary-btn {
+    padding: 0 var(--sp-2);
+    font-size: var(--fs-xs);
+  }
+  .glossary-btn svg {
     display: none;
   }
 }

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // 侧栏：经营总览 与 AI 助手 两个页面。
-defineProps<{ active: string }>()
+// 移动端（≤900px）由 App.vue 的汉堡按钮控制 mobileOpen，变成 off-canvas 抽屉。
+defineProps<{ active: string; mobileOpen?: boolean }>()
 defineEmits<{ (e: 'navigate', view: 'overview' | 'assistant'): void }>()
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :class="{ 'sidebar--open': mobileOpen }">
     <div class="brand">
       <div class="brand__mark serif" aria-hidden="true">M</div>
       <div class="brand__text">
@@ -195,13 +196,32 @@ defineEmits<{ (e: 'navigate', view: 'overview' | 'assistant'): void }>()
 
 @media (max-width: 900px) {
   .sidebar {
-    width: 176px;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 272px;
+    max-width: 84vw;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 60;
+    transform: translateX(-103%);
+    transition: transform 280ms var(--ease);
   }
-  .brand,
-  .nav,
+
+  .sidebar--open {
+    transform: none;
+    box-shadow: 18px 0 44px rgba(15, 55, 51, 0.28);
+  }
+
+  /* 触摸目标加大到 44px */
+  .nav__item {
+    padding: 12px var(--sp-3);
+    margin-bottom: var(--sp-1);
+  }
+
   .sidebar__foot {
-    padding-left: var(--sp-3);
-    padding-right: var(--sp-3);
+    padding-bottom: max(var(--sp-4), env(safe-area-inset-bottom));
   }
 }
 </style>

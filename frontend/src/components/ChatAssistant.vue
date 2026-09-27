@@ -864,4 +864,33 @@ onMounted(() => {
     display: none;
   }
 }
+
+/* —— 移动端 —— */
+@media (max-width: 680px) {
+  .chat__mode {
+    white-space: normal; /* 降级模式长文案允许换行，避免撑破状态条 */
+  }
+
+  .chat__bubble {
+    max-width: 92%;
+  }
+
+  /* iOS：输入字号 <16px 聚焦时页面会自动放大 */
+  .chat__input {
+    font-size: 16px;
+  }
+
+  .chat__actions {
+    flex-wrap: wrap;
+  }
+
+  .chat__actions .btn {
+    flex: 1;
+    height: 44px;
+  }
+
+  .chat__welcome {
+    padding-top: var(--sp-6);
+  }
+}
 </style>
