@@ -38,7 +38,7 @@ const hint = computed(() => {
       <label class="filter__label" for="start">开始日期</label>
       <input
         id="start"
-        class="filter__input"
+        class="filter__input num"
         type="date"
         :value="start"
         :min="dataPeriod.start ?? undefined"
@@ -47,13 +47,13 @@ const hint = computed(() => {
       />
     </div>
 
-    <span class="filter__sep">至</span>
+    <span class="filter__sep" aria-hidden="true">至</span>
 
     <div class="filter__field">
       <label class="filter__label" for="end">结束日期</label>
       <input
         id="end"
-        class="filter__input"
+        class="filter__input num"
         type="date"
         :value="end"
         :min="dataPeriod.start ?? undefined"
@@ -96,8 +96,8 @@ const hint = computed(() => {
 .filter {
   display: flex;
   align-items: flex-end;
-  gap: 12px;
-  padding: 14px 18px;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
   flex-wrap: wrap;
   position: relative;
 }
@@ -105,7 +105,7 @@ const hint = computed(() => {
 .filter__field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 
 .filter__field--store {
@@ -114,85 +114,61 @@ const hint = computed(() => {
 }
 
 .filter__label {
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  font-weight: 500;
 }
 
 .filter__input {
   height: 36px;
-  padding: 0 10px;
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--c-text);
-  font-size: 13px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--fs-sm);
   outline: none;
   min-width: 140px;
+  transition:
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+
+.filter__input:hover {
+  border-color: var(--ink-3);
 }
 
 .filter__input:focus {
-  border-color: var(--c-primary);
-  box-shadow: 0 0 0 2px rgba(23, 75, 70, 0.12);
+  border-color: var(--pine);
+  box-shadow: 0 0 0 3px rgba(23, 75, 70, 0.1);
+}
+
+/* 日期指示器染成松绿，去掉原生蓝 */
+.filter__input::-webkit-calendar-picker-indicator {
+  opacity: 0.55;
+  cursor: pointer;
+}
+.filter__input::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
 }
 
 .filter__sep {
-  color: var(--c-text-secondary);
-  padding-bottom: 8px;
+  color: var(--ink-3);
+  padding-bottom: 9px;
+  font-size: var(--fs-sm);
 }
 
 .filter__actions {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-2);
   margin-left: auto;
-  padding-bottom: 1px;
-}
-
-.btn {
-  height: 36px;
-  padding: 0 18px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-  white-space: nowrap;
-}
-
-.btn--primary {
-  background: var(--c-primary);
-  color: #fff;
-}
-
-.btn--primary:hover:not(:disabled) {
-  background: var(--c-primary-hover);
-}
-
-.btn--primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn--ghost {
-  background: #fff;
-  color: var(--c-text);
-  border-color: var(--c-border);
-}
-
-.btn--ghost:hover:not(:disabled) {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
-}
-
-.btn--ghost:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .filter__hint {
   position: absolute;
   bottom: -24px;
-  left: 18px;
-  font-size: 12px;
-  color: var(--c-red);
+  left: var(--sp-5);
+  font-size: var(--fs-xs);
+  color: var(--vermilion);
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { TraceNotFoundError, fetchTrace } from '../api'
 import type { TracePayload } from '../types'
 
@@ -62,6 +62,20 @@ watch(
   { immediate: true },
 )
 
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') emit('close')
+}
+
+watch(
+  () => props.open,
+  (open) => {
+    if (open) window.addEventListener('keydown', onKeydown)
+    else window.removeEventListener('keydown', onKeydown)
+  },
+)
+
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+
 function toggle(key: string) {
   collapsed.value[key] = !collapsed.value[key]
 }
@@ -122,327 +136,405 @@ function exportJson() {
 </script>
 
 <template>
-  <div v-if="open" class="drawer" role="dialog" aria-label="调试记录">
-    <div class="drawer__head">
-      <div class="drawer__title">
-        <span>调试记录</span>
-        <span v-if="trace" class="drawer__id num">{{ trace.trace_id }}</span>
-      </div>
-      <div class="drawer__head-actions">
-        <button class="mini" :disabled="!trace" @click="copyId">
-          {{ copied ? '已复制' : '复制 ID' }}
-        </button>
-        <button class="mini" :disabled="!trace" @click="exportJson">导出脱敏 JSON</button>
-        <button class="mini mini--close" @click="emit('close')">关闭</button>
-      </div>
-    </div>
+  <div v-if="open" class="trace-layer">
+    <div class="trace-scrim" @click="emit('close')"></div>
 
-    <div class="drawer__lookup">
-      <input
-        v-model="manualId"
-        class="drawer__input"
-        placeholder="粘贴 trace ID（例如 t-20260901-0001）"
-        @keydown.enter="load(manualId)"
-      />
-      <button class="btn" @click="load(manualId)">查看</button>
-    </div>
-
-    <div class="drawer__body">
-      <div v-if="loading" class="state">加载中…</div>
-      <div v-else-if="notFound" class="state state--warn">
-        记录不存在或已过期（服务只保留有界数量的 trace）。
+    <aside class="drawer" role="dialog" aria-label="调试记录">
+      <div class="drawer__head">
+        <div class="drawer__title">
+          <span>调试记录</span>
+          <span v-if="trace" class="drawer__id num">{{ trace.trace_id }}</span>
+        </div>
+        <div class="drawer__head-actions">
+          <button class="mini" :disabled="!trace" @click="copyId">
+            {{ copied ? '已复制' : '复制 ID' }}
+          </button>
+          <button class="mini" :disabled="!trace" @click="exportJson">导出脱敏 JSON</button>
+          <button class="mini mini--close" @click="emit('close')">关闭</button>
+        </div>
       </div>
-      <div v-else-if="error" class="state state--err">{{ error }}</div>
 
-      <template v-else-if="trace">
-        <!-- 1. 概览 -->
-        <section class="sec">
-          <h3 class="sec__title">概览</h3>
-          <div class="kv">
-            <div class="kv__row"><span class="kv__k">原问题</span><span class="kv__v">{{ trace.question || '（空）' }}</span></div>
-            <div class="kv__row"><span class="kv__k">回答类型</span><span class="kv__v">{{ trace.answer.type || '—' }}</span></div>
-            <div class="kv__row"><span class="kv__k">模式</span><span class="kv__v">{{ modeLabel }}</span></div>
-            <div class="kv__row"><span class="kv__k">总耗时</span><span class="kv__v num">{{ fmtMs(trace.total_ms) }}</span></div>
-            <div class="kv__row">
-              <span class="kv__k">错误数</span>
-              <span class="kv__v num" :class="{ 'kv__v--bad': trace.errors.length }">{{ trace.errors.length }}</span>
+      <div class="drawer__lookup">
+        <input
+          v-model="manualId"
+          class="drawer__input num"
+          placeholder="粘贴 trace ID（例如 t-20260901-0001）"
+          @keydown.enter="load(manualId)"
+        />
+        <button class="btn" @click="load(manualId)">查看</button>
+      </div>
+
+      <div class="drawer__body">
+        <div v-if="loading" class="state">加载中…</div>
+        <div v-else-if="notFound" class="state state--warn">
+          记录不存在或已过期（服务只保留有界数量的 trace）。
+        </div>
+        <div v-else-if="error" class="state state--err">{{ error }}</div>
+
+        <template v-else-if="trace">
+          <!-- 1. 概览 -->
+          <section class="sec">
+            <h3 class="sec__title">概览</h3>
+            <div class="kv">
+              <div class="kv__row"><span class="kv__k">原问题</span><span class="kv__v">{{ trace.question || '（空）' }}</span></div>
+              <div class="kv__row"><span class="kv__k">回答类型</span><span class="kv__v">{{ trace.answer.type || '—' }}</span></div>
+              <div class="kv__row"><span class="kv__k">模式</span><span class="kv__v">{{ modeLabel }}</span></div>
+              <div class="kv__row"><span class="kv__k">总耗时</span><span class="kv__v num">{{ fmtMs(trace.total_ms) }}</span></div>
+              <div class="kv__row">
+                <span class="kv__k">错误数</span>
+                <span class="kv__v num" :class="{ 'kv__v--bad': trace.errors.length }">{{ trace.errors.length }}</span>
+              </div>
             </div>
-          </div>
-          <div v-if="trace.answer.answer_preview" class="preview">{{ trace.answer.answer_preview }}</div>
-        </section>
+            <div v-if="trace.answer.answer_preview" class="preview">{{ trace.answer.answer_preview }}</div>
+          </section>
 
-        <!-- 2. 问题理解 -->
-        <section class="sec">
-          <h3 class="sec__title">问题理解</h3>
-          <div class="kv">
-            <div class="kv__row"><span class="kv__k">补全问题</span><span class="kv__v">{{ trace.plan.standalone_question || trace.question }}</span></div>
-            <div class="kv__row"><span class="kv__k">意图 / 类型</span><span class="kv__v">{{ trace.plan.intent || '—' }} / {{ trace.plan.kind || '—' }}</span></div>
-            <div class="kv__row"><span class="kv__k">日期区间</span><span class="kv__v num">{{ pretty(trace.plan.window) || '—' }}<template v-if="trace.plan.compare_window"> · 对比 {{ pretty(trace.plan.compare_window) }}</template></span></div>
-            <div class="kv__row"><span class="kv__k">门店 / 商品</span><span class="kv__v">{{ trace.plan.store_id || '全部' }} / {{ trace.plan.product_id || '全部' }}</span></div>
-            <div class="kv__row"><span class="kv__k">指标</span><span class="kv__v">{{ trace.plan.metric || '—' }}</span></div>
-            <div class="kv__row"><span class="kv__k">检索查询</span><span class="kv__v">{{ trace.plan.search_query || '—' }}</span></div>
-          </div>
-        </section>
-
-        <!-- 3. 知识库检索 -->
-        <section class="sec">
-          <h3 class="sec__title">知识库检索 <span class="sec__n">{{ trace.retrievals.length }}</span></h3>
-          <div v-if="!trace.retrievals.length" class="empty">本次没有检索知识库。</div>
-          <div v-for="(r, i) in trace.retrievals" :key="'r' + i" class="sub">
-            <div class="sub__head">
-              <span class="sub__name">{{ r.query }}</span>
-              <span class="sub__meta num">
-                as_of {{ r.as_of || '—' }} · 门店 {{ r.store_id || '全部' }} · 覆盖 {{ r.coverage ?? '—' }}
-                <template v-if="r.window"> · 窗口 {{ r.window[0] }}~{{ r.window[1] }}</template>
-              </span>
+          <!-- 2. 问题理解 -->
+          <section class="sec">
+            <h3 class="sec__title">问题理解</h3>
+            <div class="kv">
+              <div class="kv__row"><span class="kv__k">补全问题</span><span class="kv__v">{{ trace.plan.standalone_question || trace.question }}</span></div>
+              <div class="kv__row"><span class="kv__k">意图 / 类型</span><span class="kv__v">{{ trace.plan.intent || '—' }} / {{ trace.plan.kind || '—' }}</span></div>
+              <div class="kv__row"><span class="kv__k">日期区间</span><span class="kv__v num">{{ pretty(trace.plan.window) || '—' }}<template v-if="trace.plan.compare_window"> · 对比 {{ pretty(trace.plan.compare_window) }}</template></span></div>
+              <div class="kv__row"><span class="kv__k">门店 / 商品</span><span class="kv__v">{{ trace.plan.store_id || '全部' }} / {{ trace.plan.product_id || '全部' }}</span></div>
+              <div class="kv__row"><span class="kv__k">指标</span><span class="kv__v">{{ trace.plan.metric || '—' }}</span></div>
+              <div class="kv__row"><span class="kv__k">检索查询</span><span class="kv__v">{{ trace.plan.search_query || '—' }}</span></div>
             </div>
+          </section>
+
+          <!-- 3. 知识库检索 -->
+          <section class="sec">
+            <h3 class="sec__title">知识库检索 <span class="sec__n num">{{ trace.retrievals.length }}</span></h3>
+            <div v-if="!trace.retrievals.length" class="empty">本次没有检索知识库。</div>
+            <div v-for="(r, i) in trace.retrievals" :key="'r' + i" class="sub">
+              <div class="sub__head">
+                <span class="sub__name">{{ r.query }}</span>
+                <span class="sub__meta num">
+                  as_of {{ r.as_of || '—' }} · 门店 {{ r.store_id || '全部' }} · 覆盖 {{ r.coverage ?? '—' }}
+                  <template v-if="r.window"> · 窗口 {{ r.window[0] }}~{{ r.window[1] }}</template>
+                </span>
+              </div>
+              <table class="mini-table">
+                <thead>
+                  <tr><th>doc_id</th><th>chunk_id</th><th>分数</th><th>片段</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(h, j) in r.hits" :key="'h' + j" :class="{ 'row--padded': h.padded }">
+                    <td class="nowrap">{{ h.doc_id }}</td>
+                    <td class="nowrap muted-cell">{{ h.chunk_id }}</td>
+                    <td class="num nowrap">{{ h.score }}</td>
+                    <td>
+                      <span v-if="h.padded" class="tag tag--muted">补位</span>
+                      <span v-else-if="h.sibling" class="tag tag--muted">相邻</span>
+                      <span v-if="h.kind === 'table'" class="tag tag--muted">表格</span>
+                      <span class="clip">{{ h.preview }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-if="r.filtered && r.filtered.length" class="filters">
+                <button class="filters__toggle" @click="toggleFilters('f' + i)">
+                  被过滤 {{ r.filtered.length }} 篇
+                  {{ expandedFilters['f' + i] ? '（收起）' : '（展开全部）' }}
+                </button>
+                <span
+                  v-for="(f, j) in visibleFiltered('f' + i, r.filtered)"
+                  :key="'f' + j"
+                  class="filter-item"
+                >
+                  {{ f.doc_id }}（{{ f.reason }}）
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 4. 工具与数据 -->
+          <section class="sec">
+            <h3 class="sec__title">工具与数据 <span class="sec__n num">{{ trace.tools.length }}</span></h3>
+            <div v-if="!trace.tools.length" class="empty">本次没有执行工具。</div>
+            <div v-for="(t, i) in trace.tools" :key="'t' + i" class="sub">
+              <div class="sub__head">
+                <span class="sub__name">
+                  {{ t.tool }}
+                  <span class="tag" :class="`tag--${t.status}`">{{ t.status }}</span>
+                  <span v-if="t.accepted" class="tag tag--ok">已用于{{ t.entered === 'citations' ? '引用' : '证据' }}</span>
+                  <span v-else-if="t.pending" class="tag tag--warn">待回答定稿后核对</span>
+                  <span v-else class="tag tag--muted">未采纳</span>
+                </span>
+                <span class="sub__meta num">{{ fmtMs(t.took_ms) }}<template v-if="t.result_bytes"> · {{ t.result_bytes }} B</template></span>
+              </div>
+              <div class="kv__row"><span class="kv__k">参数</span><span class="kv__v num">{{ fmtParams(t.params) || '—' }}</span></div>
+              <div v-if="t.reject_reason" class="reject">拒绝原因：{{ t.reject_reason }}</div>
+              <button class="link" @click="toggle('tool' + i)">
+                {{ collapsed['tool' + i] ? '展开结果' : '收起结果' }}
+              </button>
+              <pre v-if="!collapsed['tool' + i] && t.result_preview" class="code">{{ t.result_preview }}</pre>
+            </div>
+          </section>
+
+          <!-- 5. 模型与异常 -->
+          <section class="sec">
+            <h3 class="sec__title">模型与异常</h3>
+            <div v-if="!trace.model_called" class="empty">
+              本次未调用模型（{{ trace.mode === 'mock' ? 'mock 降级模式' : '规划器已决定走本地模板' }}）。
+            </div>
+            <div v-for="(c, i) in trace.llm_calls" :key="'l' + i" class="sub">
+              <div class="sub__head">
+                <span class="sub__name">第 {{ i + 1 }} 次调用</span>
+                <span class="sub__meta num">
+                  {{ c.model || '' }} · {{ fmtMs(c.took_ms) }}
+                  <template v-if="c.status"> · HTTP {{ c.status }}</template>
+                  <template v-if="c.error"> · {{ c.error }}</template>
+                </span>
+              </div>
+              <details v-if="c.request" class="fold">
+                <summary>最终请求 / 提示词</summary>
+                <pre class="code">{{ c.request }}</pre>
+              </details>
+              <details v-if="c.response">
+                <summary>原始响应</summary>
+                <pre class="code">{{ c.response }}</pre>
+              </details>
+              <div v-if="c.detail" class="reject">{{ c.detail }}</div>
+            </div>
+            <div v-if="trace.errors.length" class="errors">
+              <div v-for="(e, i) in trace.errors" :key="'e' + i" class="error-item">
+                <div class="error-item__head">{{ e.where }} · {{ e.type }}</div>
+                <div class="error-item__msg">{{ e.message }}</div>
+                <details v-if="e.traceback">
+                  <summary>堆栈</summary>
+                  <pre class="code">{{ e.traceback }}</pre>
+                </details>
+              </div>
+            </div>
+          </section>
+
+          <!-- 6. 时间线 -->
+          <section class="sec">
+            <h3 class="sec__title">时间线</h3>
             <table class="mini-table">
               <thead>
-                <tr><th>doc_id</th><th>chunk_id</th><th>分数</th><th>片段</th></tr>
+                <tr><th>步骤</th><th>发生</th><th>耗时</th></tr>
               </thead>
               <tbody>
-                <tr v-for="(h, j) in r.hits" :key="'h' + j" :class="{ 'row--padded': h.padded }">
-                  <td class="nowrap">{{ h.doc_id }}</td>
-                  <td class="nowrap muted-cell">{{ h.chunk_id }}</td>
-                  <td class="num nowrap">{{ h.score }}</td>
-                  <td>
-                    <span v-if="h.padded" class="tag tag--muted">补位</span>
-                    <span v-else-if="h.sibling" class="tag tag--muted">相邻</span>
-                    <span v-if="h.kind === 'table'" class="tag tag--muted">表格</span>
-                    <span class="clip">{{ h.preview }}</span>
-                  </td>
+                <tr v-for="(s, i) in trace.steps" :key="'s' + i">
+                  <td>{{ s.step }}</td>
+                  <td class="num nowrap">{{ s.at_ms }} ms</td>
+                  <td class="num nowrap">{{ fmtMs(s.took_ms) }}</td>
                 </tr>
               </tbody>
             </table>
-            <div v-if="r.filtered && r.filtered.length" class="filters">
-              <button class="filters__toggle" @click="toggleFilters('f' + i)">
-                被过滤 {{ r.filtered.length }} 篇
-                {{ expandedFilters['f' + i] ? '（收起）' : '（展开全部）' }}
-              </button>
-              <span
-                v-for="(f, j) in visibleFiltered('f' + i, r.filtered)"
-                :key="'f' + j"
-                class="filter-item"
-              >
-                {{ f.doc_id }}（{{ f.reason }}）
-              </span>
-            </div>
-          </div>
-        </section>
-
-        <!-- 4. 工具与数据 -->
-        <section class="sec">
-          <h3 class="sec__title">工具与数据 <span class="sec__n">{{ trace.tools.length }}</span></h3>
-          <div v-if="!trace.tools.length" class="empty">本次没有执行工具。</div>
-          <div v-for="(t, i) in trace.tools" :key="'t' + i" class="sub">
-            <div class="sub__head">
-              <span class="sub__name">
-                {{ t.tool }}
-                <span class="tag" :class="`tag--${t.status}`">{{ t.status }}</span>
-                <span v-if="t.accepted" class="tag tag--ok">已用于{{ t.entered === 'citations' ? '引用' : '证据' }}</span>
-                <span v-else-if="t.pending" class="tag tag--warn">待回答定稿后核对</span>
-                <span v-else class="tag tag--muted">未采纳</span>
-              </span>
-              <span class="sub__meta num">{{ fmtMs(t.took_ms) }}<template v-if="t.result_bytes"> · {{ t.result_bytes }} B</template></span>
-            </div>
-            <div class="kv__row"><span class="kv__k">参数</span><span class="kv__v num">{{ fmtParams(t.params) || '—' }}</span></div>
-            <div v-if="t.reject_reason" class="reject">拒绝原因：{{ t.reject_reason }}</div>
-            <button class="link" @click="toggle('tool' + i)">
-              {{ collapsed['tool' + i] ? '展开结果' : '收起结果' }}
-            </button>
-            <pre v-if="!collapsed['tool' + i] && t.result_preview" class="code">{{ t.result_preview }}</pre>
-          </div>
-        </section>
-
-        <!-- 5. 模型与异常 -->
-        <section class="sec">
-          <h3 class="sec__title">模型与异常</h3>
-          <div v-if="!trace.model_called" class="empty">
-            本次未调用模型（{{ trace.mode === 'mock' ? 'mock 降级模式' : '规划器已决定走本地模板' }}）。
-          </div>
-          <div v-for="(c, i) in trace.llm_calls" :key="'l' + i" class="sub">
-            <div class="sub__head">
-              <span class="sub__name">第 {{ i + 1 }} 次调用</span>
-              <span class="sub__meta num">
-                {{ c.model || '' }} · {{ fmtMs(c.took_ms) }}
-                <template v-if="c.status"> · HTTP {{ c.status }}</template>
-                <template v-if="c.error"> · {{ c.error }}</template>
-              </span>
-            </div>
-            <details v-if="c.request" class="fold">
-              <summary>最终请求 / 提示词</summary>
-              <pre class="code">{{ c.request }}</pre>
-            </details>
-            <details v-if="c.response">
-              <summary>原始响应</summary>
-              <pre class="code">{{ c.response }}</pre>
-            </details>
-            <div v-if="c.detail" class="reject">{{ c.detail }}</div>
-          </div>
-          <div v-if="trace.errors.length" class="errors">
-            <div v-for="(e, i) in trace.errors" :key="'e' + i" class="error-item">
-              <div class="error-item__head">{{ e.where }} · {{ e.type }}</div>
-              <div class="error-item__msg">{{ e.message }}</div>
-              <details v-if="e.traceback">
-                <summary>堆栈</summary>
-                <pre class="code">{{ e.traceback }}</pre>
-              </details>
-            </div>
-          </div>
-        </section>
-
-        <!-- 6. 时间线 -->
-        <section class="sec">
-          <h3 class="sec__title">时间线</h3>
-          <table class="mini-table">
-            <thead>
-              <tr><th>步骤</th><th>发生</th><th>耗时</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="(s, i) in trace.steps" :key="'s' + i">
-                <td>{{ s.step }}</td>
-                <td class="num nowrap">{{ s.at_ms }} ms</td>
-                <td class="num nowrap">{{ fmtMs(s.took_ms) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
-      </template>
-    </div>
+          </section>
+        </template>
+      </div>
+    </aside>
   </div>
 </template>
 
 <style scoped>
-.drawer {
+.trace-layer {
   position: fixed;
-  top: 0;
-  right: 0;
-  width: min(620px, 100vw);
-  height: 100vh;
-  background: var(--c-bg);
-  border-left: 1px solid var(--c-border);
-  box-shadow: -8px 0 24px rgba(23, 75, 70, 0.08);
-  display: flex;
-  flex-direction: column;
+  inset: 0;
   z-index: 50;
 }
+
+.trace-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(30, 46, 43, 0.28);
+  animation: fade 200ms var(--ease) both;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(640px, 100vw);
+  height: 100vh;
+  background: var(--paper);
+  border-left: 1px solid var(--rule-strong);
+  box-shadow: -12px 0 32px rgba(23, 75, 70, 0.12);
+  display: flex;
+  flex-direction: column;
+  animation: slide-in 260ms var(--ease) both;
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0.4;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
 .drawer__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px;
-  background: var(--c-card);
-  border-bottom: 1px solid var(--c-border);
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--pine);
+  color: #eaf1ee;
 }
+
 .drawer__title {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--sp-3);
+  font-size: var(--fs-md);
   font-weight: 600;
-  font-size: 15px;
+  letter-spacing: 0.03em;
 }
+
 .drawer__id {
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  font-size: var(--fs-xs);
+  color: rgba(234, 241, 238, 0.7);
   font-weight: 400;
 }
+
 .drawer__head-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--sp-2);
 }
+
 .mini {
   height: 28px;
   padding: 0 10px;
-  font-size: 12px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: #fff;
+  font-size: var(--fs-xs);
+  border: 1px solid rgba(234, 241, 238, 0.35);
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: #eaf1ee;
   cursor: pointer;
+  transition:
+    background var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
 }
 .mini:hover:not(:disabled) {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.5);
 }
 .mini:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 .mini--close {
-  border-color: #e6cfcc;
-  color: var(--c-red);
+  border-color: rgba(192, 138, 58, 0.7);
+  color: #e8c98d;
 }
+
 .drawer__lookup {
   display: flex;
-  gap: 8px;
-  padding: 12px 18px;
-  background: var(--c-card);
-  border-bottom: 1px solid var(--c-border);
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
 }
+
 .drawer__input {
   flex: 1;
+  min-width: 0;
   height: 32px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  padding: 0 10px;
-  font-size: 13px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  background: var(--surface);
 }
 .drawer__input:focus {
   outline: none;
-  border-color: var(--c-primary);
+  border-color: var(--pine);
+  box-shadow: 0 0 0 3px rgba(23, 75, 70, 0.08);
 }
+
 .btn {
   height: 32px;
-  padding: 0 14px;
+  padding: 0 var(--sp-4);
   border: none;
-  border-radius: 6px;
-  background: var(--c-primary);
-  color: #fff;
-  font-size: 13px;
+  border-radius: var(--r-sm);
+  background: var(--pine);
+  color: #f6f2e8;
+  font-size: var(--fs-xs);
   cursor: pointer;
+  transition: background var(--dur) var(--ease);
 }
+.btn:hover {
+  background: var(--pine-deep);
+}
+
 .drawer__body {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 18px 32px;
+  padding: var(--sp-4) var(--sp-5) var(--sp-10);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--sp-4);
+  counter-reset: sec;
 }
+
 .state {
-  color: var(--c-text-secondary);
-  font-size: 13px;
-  padding: 24px 0;
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+  padding: var(--sp-6) 0;
 }
 .state--warn {
-  color: var(--c-amber);
+  color: var(--ochre);
 }
 .state--err {
-  color: var(--c-red);
+  color: var(--vermilion);
 }
+
 .sec {
-  background: var(--c-card);
-  border: 1px solid var(--c-border);
-  border-radius: 10px;
-  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: var(--sp-4);
 }
+
 .sec__title {
-  margin: 0 0 10px;
-  font-size: 13px;
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-sm);
   font-weight: 600;
-  color: var(--c-primary);
+  color: var(--pine);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--rule-soft);
 }
+
+/* 章节序号：01 02 03… */
+.sec__title::before {
+  counter-increment: sec;
+  content: counter(sec, decimal-leading-zero);
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
 .sec__n {
-  font-size: 11px;
-  color: #fff;
-  background: var(--c-primary);
-  border-radius: 999px;
-  padding: 0 7px;
+  font-size: var(--fs-2xs);
+  color: var(--pine);
+  background: var(--pine-tint);
+  border: 1px solid var(--pine-tint-2);
+  border-radius: var(--r-xs);
+  padding: 0 6px;
   font-weight: 500;
 }
+
 .kv {
   display: flex;
   flex-direction: column;
@@ -450,77 +542,85 @@ function exportJson() {
 }
 .kv__row {
   display: flex;
-  gap: 10px;
-  font-size: 13px;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
   align-items: baseline;
 }
 .kv__k {
   flex-shrink: 0;
-  width: 76px;
-  color: var(--c-text-secondary);
-  font-size: 12px;
+  width: 72px;
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
 }
 .kv__v {
   word-break: break-word;
+  min-width: 0;
 }
 .kv__v--bad {
-  color: var(--c-red);
+  color: var(--vermilion);
   font-weight: 600;
 }
+
 .preview {
-  margin-top: 10px;
-  padding: 10px 12px;
-  background: #fafbfa;
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.6;
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
 }
+
 .sub {
-  border-top: 1px dashed var(--c-border);
-  padding-top: 10px;
-  margin-top: 10px;
+  border-top: 1px dashed var(--rule);
+  padding-top: var(--sp-3);
+  margin-top: var(--sp-3);
 }
 .sub:first-of-type {
   border-top: none;
   margin-top: 0;
   padding-top: 0;
 }
+
 .sub__head {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--sp-3);
   align-items: baseline;
 }
 .sub__name {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 .sub__meta {
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
   text-align: right;
 }
+
 .mini-table {
   width: 100%;
   border-collapse: collapse;
-  margin-top: 8px;
-  font-size: 12px;
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
 }
 .mini-table th {
   text-align: left;
-  color: var(--c-text-secondary);
+  color: var(--ink-3);
   font-weight: 500;
-  padding: 4px 6px;
-  border-bottom: 1px solid var(--c-border);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.08em;
+  padding: var(--sp-1) 6px;
+  border-bottom: 1px solid var(--rule-strong);
 }
 .mini-table td {
   padding: 5px 6px;
-  border-bottom: 1px solid #f0f3f1;
+  border-bottom: 1px solid var(--rule-soft);
   vertical-align: top;
 }
+
 .nowrap {
   white-space: nowrap;
 }
@@ -528,130 +628,151 @@ function exportJson() {
   font-variant-numeric: tabular-nums;
 }
 .row--padded td {
-  color: var(--c-text-secondary);
+  color: var(--ink-3);
 }
 .clip {
   display: inline-block;
   word-break: break-word;
 }
+
 .tag {
   display: inline-block;
-  font-size: 11px;
-  padding: 0 6px;
-  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  padding: 0 5px;
+  border-radius: var(--r-xs);
   margin-right: 4px;
+  border: 1px solid transparent;
 }
 .tag--ok {
-  background: #eef5f3;
-  color: var(--c-primary);
+  background: var(--pine-tint);
+  color: var(--pine);
+  border-color: var(--pine-tint-2);
 }
 .tag--warn {
-  background: #fbf3e8;
-  color: var(--c-amber);
+  background: var(--ochre-tint);
+  color: var(--ochre);
+  border-color: var(--ochre-line);
 }
 .tag--rejected,
 .tag--error {
-  background: #f7eeee;
-  color: var(--c-red);
+  background: var(--vermilion-tint);
+  color: var(--vermilion);
+  border-color: #efd8d1;
 }
 .tag--muted {
-  background: #f0f2f0;
-  color: var(--c-text-secondary);
+  background: var(--surface-sunk);
+  color: var(--ink-3);
+  border-color: var(--rule-soft);
 }
+
 .filters {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--c-text-secondary);
-  line-height: 1.7;
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  line-height: 1.8;
 }
 .filters__toggle {
-  color: var(--c-amber);
+  color: var(--ochre);
   background: none;
   border: none;
   padding: 0;
-  margin-right: 10px;
+  margin-right: var(--sp-2);
   font: inherit;
   cursor: pointer;
-  text-decoration: underline;
+  border-bottom: 1px solid currentColor;
 }
 .filters__toggle:focus-visible {
-  outline: 2px solid var(--c-primary);
+  outline: 2px solid var(--pine);
   outline-offset: 2px;
 }
 .muted-cell {
-  color: var(--c-text-secondary);
+  color: var(--ink-3);
 }
 .filter-item {
-  margin-right: 10px;
+  margin-right: var(--sp-2);
 }
+
 .reject {
   margin-top: 6px;
-  font-size: 12px;
-  color: var(--c-red);
-  background: #fdf3f2;
-  border-radius: 6px;
-  padding: 6px 8px;
+  font-size: var(--fs-xs);
+  color: var(--vermilion);
+  background: var(--vermilion-tint);
+  border-left: 2px solid var(--vermilion);
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  padding: 6px var(--sp-2);
 }
+
 .code {
-  margin: 8px 0 0;
-  padding: 10px;
-  background: #f7f9f8;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
-  font-size: 11.5px;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 260px;
   overflow-y: auto;
 }
+
 .link {
   margin-top: 6px;
   border: none;
   background: none;
-  color: var(--c-primary);
-  font-size: 12px;
+  color: var(--pine);
+  font-size: var(--fs-xs);
   cursor: pointer;
   padding: 0;
+  border-bottom: 1px solid transparent;
 }
+.link:hover {
+  border-bottom-color: var(--pine);
+}
+
 .fold {
   margin-top: 6px;
 }
 details summary {
   cursor: pointer;
-  font-size: 12px;
-  color: var(--c-primary);
+  font-size: var(--fs-xs);
+  color: var(--pine);
   margin-top: 6px;
 }
+
 .empty {
-  font-size: 13px;
-  color: var(--c-text-secondary);
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
 }
+
 .errors {
-  margin-top: 10px;
+  margin-top: var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 .error-item {
-  border-left: 2px solid var(--c-red);
-  padding-left: 10px;
+  border-left: 2px solid var(--vermilion);
+  padding-left: var(--sp-3);
 }
 .error-item__head {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 600;
-  color: var(--c-red);
+  color: var(--vermilion);
 }
 .error-item__msg {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   word-break: break-word;
+  color: var(--ink-2);
 }
+
 @media (max-width: 680px) {
   .drawer {
     width: 100vw;
   }
   .kv__k {
-    width: 64px;
+    width: 60px;
   }
 }
 </style>

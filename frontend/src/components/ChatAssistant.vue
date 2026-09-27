@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { fetchChat, fetchHealth } from '../api'
 import type { AnswerType, Citation, DataEvidence, HealthInfo } from '../types'
 import RichText from './RichText.vue'
@@ -127,6 +127,9 @@ async function send(questionOverride?: string) {
   } finally {
     sending.value = false
     scrollToBottom()
+    // 回答是直接改消息对象的属性落定的，那种赋值不会触发 deep watch，
+    // 所以这里显式存一次：刷新后要能连回答一起恢复。
+    persistMessages()
   }
 }
 
@@ -143,6 +146,9 @@ function newChat() {
   messages.value = []
   expanded.value = {}
   input.value = ''
+  // 「新建会话」是真的开新会话：把续聊用的标识与记录一起清掉。
+  writeStored(SESSION_KEY, null)
+  writeStored(MESSAGES_KEY, null)
   inputEl.value?.focus()
 }
 
@@ -189,28 +195,76 @@ async function loadHealth() {
   }
 }
 
+// -- 刷新后续聊 -----------------------------------------------------------------
+// 会话标识与消息记录放在 sessionStorage（按标签页隔离，不与其它标签页的对话串）。
+// 后端 SessionStore 是进程内存、重启即失效，所以这里只保证"刷新/重开这个标签页"续得上；
+// 存不进去（隐私模式、超额）时静默降级成原来的行为，不影响问答本身。
+
+const SESSION_KEY = 'moneki.chat.session_id'
+const MESSAGES_KEY = 'moneki.chat.messages'
+
+function readStored<T>(key: string): T | null {
+  try {
+    const raw = window.sessionStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : null
+  } catch {
+    return null
+  }
+}
+
+function writeStored(key: string, value: unknown): void {
+  try {
+    if (value === null || value === undefined) {
+      window.sessionStorage.removeItem(key)
+      return
+    }
+    window.sessionStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    /* 存不下就算了：续聊是增强，不是前提 */
+  }
+}
+
+function persistMessages(): void {
+  // 进行中的那条不落盘：刷新后它不可能真的还在跑，恢复了会显示一条没有下文的回答。
+  const list = messages.value.filter((m) => m.state !== 'loading')
+  // 空列表直接移除键：watch 的 flush 比 newChat() 里的清空晚一步，
+  // 若不在这里收口，会把一个空的 "[]" 又写回来。
+  writeStored(MESSAGES_KEY, list.length ? list : null)
+}
+
+// 数组本身的变更（push/splice）走 deep watch；回答属性的落定在 send() 里显式调
+// persistMessages()——直接给消息对象赋值不会触发 watch，这点容易漏。
+watch(messages, persistMessages, { deep: true })
+
 onMounted(() => {
-  sessionId.value = newSessionId()
+  // 优先接着上一段聊：同一个标签页刷新后 session_id 不变，后端才认得出"那 7 月呢"。
+  const stored = readStored<string>(SESSION_KEY)
+  sessionId.value = stored || newSessionId()
+  writeStored(SESSION_KEY, sessionId.value)
+  const storedMessages = readStored<Message[]>(MESSAGES_KEY)
+  if (Array.isArray(storedMessages) && storedMessages.length) {
+    messages.value = storedMessages
+    scrollToBottom()
+  }
   loadHealth()
 })
 </script>
 
 <template>
   <div class="chat">
-    <div class="chat__header">
-      <div>
-        <h1 class="chat__title">AI 助手</h1>
-        <div class="chat__sub">
-          基于数据库实绩与公司知识库作答，回答附数据依据与文档来源；对话范围不受看板筛选影响。
-        </div>
-      </div>
-      <div class="chat__mode-wrap">
-        <button class="chat__debug-entry" @click="openDebugLookup">调试记录</button>
-        <div class="chat__mode" :class="`chat__mode--${mode}`">
+    <!-- 状态条：说明回答范围与当前模型模式 -->
+    <div class="chat__bar">
+      <p class="chat__scope">
+        回答基于数据库实绩与公司知识库，附数据依据与文档来源；对话范围不受看板筛选影响。
+      </p>
+      <div class="chat__bar-side">
+        <button class="chat__text-btn" @click="openDebugLookup">调试记录</button>
+        <span class="chat__mode" :class="`chat__mode--${mode}`">
+          <span class="chat__mode-dot" aria-hidden="true"></span>
           <template v-if="mode === 'live'">已接入大模型 · 在线</template>
           <template v-else-if="mode === 'mock'">本地演示 · 降级模式（未配置模型 Key）</template>
           <template v-else>{{ healthError || '服务状态未知' }}</template>
-        </div>
+        </span>
       </div>
     </div>
 
@@ -222,31 +276,48 @@ onMounted(() => {
           class="chat__row"
           :class="msg.role === 'user' ? 'chat__row--user' : 'chat__row--bot'"
         >
-          <div class="chat__bubble">
-            <template v-if="msg.role === 'user'">
+          <!-- 用户消息：深松绿气泡 -->
+          <template v-if="msg.role === 'user'">
+            <div class="chat__bubble chat__bubble--user">
               <div class="chat__q">{{ msg.text }}</div>
-            </template>
+            </div>
+          </template>
 
-            <template v-else-if="msg.state === 'loading'">
+          <!-- 加载中 -->
+          <template v-else-if="msg.state === 'loading'">
+            <div class="chat__avatar serif" aria-hidden="true">M</div>
+            <div class="chat__bubble chat__bubble--bot">
               <div class="chat__analyzing">正在分析<span class="chat__dots">…</span></div>
-            </template>
+            </div>
+          </template>
 
-            <template v-else-if="msg.state === 'error'">
+          <!-- 请求失败 -->
+          <template v-else-if="msg.state === 'error'">
+            <div class="chat__avatar serif" aria-hidden="true">M</div>
+            <div class="chat__bubble chat__bubble--bot">
               <div class="chat__err">
                 <div class="chat__err-title">请求失败</div>
                 <div class="chat__err-detail">{{ msg.error }}</div>
                 <button class="chat__retry" @click="retry(msg)">重试</button>
               </div>
-            </template>
+            </div>
+          </template>
 
-            <template v-else>
+          <!-- 回答 -->
+          <template v-else>
+            <div class="chat__avatar serif" aria-hidden="true">M</div>
+            <div class="chat__bubble chat__bubble--bot">
               <div class="chat__answer"><RichText :text="msg.text" /></div>
 
               <div class="chat__meta" v-if="msg.answerType">
-                <span class="chat__badge" :class="`chat__badge--${msg.answerType}`">
+                <span class="tag" :class="`tag--${msg.answerType}`">
                   {{ ANSWER_LABELS[msg.answerType] }}
                 </span>
-                <button v-if="msg.traceId" class="chat__trace-link" @click="openTrace(msg.traceId)">
+                <button
+                  v-if="msg.traceId"
+                  class="chat__text-btn chat__trace-link"
+                  @click="openTrace(msg.traceId)"
+                >
                   查看调试记录
                 </button>
               </div>
@@ -265,7 +336,7 @@ onMounted(() => {
 
                 <div v-if="expanded[msg.id]" class="chat__evidence-body">
                   <div v-for="(c, i) in msg.citations" :key="'c' + i" class="chat__doc">
-                    <div class="chat__doc-id">{{ c.doc_id }}</div>
+                    <div class="chat__doc-id num">{{ c.doc_id }}</div>
                     <div class="chat__doc-quote">{{ c.quote }}</div>
                   </div>
 
@@ -286,14 +357,18 @@ onMounted(() => {
                 </div>
               </div>
 
-              <div v-if="!msg.citations.length && !msg.evidence.length && msg.answerType === 'refusal'" class="chat__nosource">
+              <div
+                v-if="!msg.citations.length && !msg.evidence.length && msg.answerType === 'refusal'"
+                class="chat__nosource"
+              >
                 无可用来源
               </div>
-            </template>
-          </div>
+            </div>
+          </template>
         </div>
       </div>
 
+      <!-- 空状态：给出可点的示例问题 -->
       <div v-else class="chat__welcome">
         <div class="chat__welcome-title">有什么想了解的？</div>
         <div class="chat__welcome-desc">可以问经营数字、制度规定，也可以把两者合起来问。</div>
@@ -304,6 +379,12 @@ onMounted(() => {
             class="chat__example"
             @click="input = q"
           >
+            <span class="chat__example-icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="9" cy="9" r="5.5" />
+                <path d="m13.2 13.2 3.3 3.3" />
+              </svg>
+            </span>
             {{ q }}
           </button>
         </div>
@@ -320,8 +401,9 @@ onMounted(() => {
         @keydown="onKeydown"
       ></textarea>
       <div class="chat__actions">
-        <button class="chat__new" :disabled="sending" @click="newChat">新建会话</button>
-        <button class="chat__send" :disabled="!canSend" @click="send()">发送</button>
+        <span class="chat__hint">Enter 发送 · Shift+Enter 换行</span>
+        <button class="btn btn--ghost" :disabled="sending" @click="newChat">新建会话</button>
+        <button class="btn btn--primary" :disabled="!canSend" @click="send()">发送</button>
       </div>
     </div>
 
@@ -337,76 +419,87 @@ onMounted(() => {
   min-height: 0;
 }
 
-.chat__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 2px 2px 16px;
-}
-
-.chat__title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.chat__sub {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--c-text-secondary);
-}
-
-.chat__mode-wrap {
+/* —— 状态条 —— */
+.chat__bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.chat__debug-entry {
-  font-size: 12px;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--c-text-secondary);
-  cursor: pointer;
-}
-.chat__debug-entry:hover {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
-}
-.chat__trace-link {
-  margin-left: 10px;
-  border: none;
-  background: none;
-  color: var(--c-primary);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
-}
-.chat__mode {
-  flex-shrink: 0;
-  font-size: 12px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--c-border);
-  background: #fff;
-  white-space: nowrap;
-}
-.chat__mode--live {
-  color: var(--c-primary);
-  border-color: #cfe0dc;
-  background: #f0f6f4;
-}
-.chat__mode--mock {
-  color: var(--c-amber);
-  border-color: #ead9c4;
-  background: #fbf6ef;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: 0 2px var(--sp-3);
+  border-bottom: 1px solid var(--rule);
 }
 
+.chat__scope {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  max-width: 66ch;
+  line-height: 1.6;
+}
+
+.chat__bar-side {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+}
+
+.chat__mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  padding: 3px var(--sp-2);
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+.chat__mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rule-strong);
+}
+
+.chat__mode--live {
+  color: var(--pine);
+  border-color: var(--pine-tint-2);
+  background: var(--pine-tint);
+}
+.chat__mode--live .chat__mode-dot {
+  background: var(--pine);
+}
+
+.chat__mode--mock {
+  color: var(--ochre);
+  border-color: var(--ochre-line);
+  background: var(--ochre-tint);
+}
+.chat__mode--mock .chat__mode-dot {
+  background: var(--ochre);
+}
+
+.chat__text-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition:
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+.chat__text-btn:hover {
+  color: var(--pine);
+  border-bottom-color: var(--pine);
+}
+
+/* —— 消息区 —— */
 .chat__body {
   flex: 1;
   min-height: 0;
@@ -420,12 +513,13 @@ onMounted(() => {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 4px 2px 8px;
+  gap: var(--sp-4);
+  padding: var(--sp-4) 2px var(--sp-3);
 }
 
 .chat__row {
   display: flex;
+  gap: var(--sp-2);
 }
 .chat__row--user {
   justify-content: flex-end;
@@ -434,34 +528,56 @@ onMounted(() => {
   justify-content: flex-start;
 }
 
-.chat__bubble {
-  max-width: min(720px, 88%);
-  border-radius: 10px;
-  padding: 12px 16px;
-  border: 1px solid var(--c-border);
-  background: var(--c-card);
-  box-shadow: var(--shadow);
-  font-size: 14px;
-}
-.chat__row--user .chat__bubble {
-  background: var(--c-primary);
+/* 助手头像：深松绿圆标 */
+.chat__avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--pine);
   color: #fff;
-  border-color: var(--c-primary);
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.chat__bubble {
+  max-width: min(720px, 86%);
+  border-radius: 12px;
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-md);
+}
+
+.chat__bubble--user {
+  background: var(--pine);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+  box-shadow: var(--shadow-sm);
+}
+
+.chat__bubble--bot {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-top-left-radius: 4px;
+  box-shadow: var(--shadow-sm);
 }
 
 .chat__q {
   white-space: pre-wrap;
   word-break: break-word;
+  line-height: 1.6;
 }
 
 .chat__answer {
   word-break: break-word;
-  line-height: 1.7;
+  line-height: 1.8;
 }
 
 .chat__analyzing {
-  color: var(--c-text-secondary);
-  font-size: 14px;
+  color: var(--ink-3);
+  font-size: var(--fs-md);
 }
 .chat__dots {
   display: inline-block;
@@ -474,230 +590,278 @@ onMounted(() => {
 }
 
 .chat__err {
-  font-size: 13px;
+  font-size: var(--fs-sm);
 }
 .chat__err-title {
-  color: var(--c-red);
+  color: var(--vermilion);
   font-weight: 600;
 }
 .chat__err-detail {
-  margin-top: 4px;
-  color: var(--c-text-secondary);
+  margin-top: 2px;
+  color: var(--ink-2);
   word-break: break-word;
 }
 .chat__retry {
-  margin-top: 10px;
+  margin-top: var(--sp-2);
   height: 30px;
-  padding: 0 14px;
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  background: #fff;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
+  transition:
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
 }
 .chat__retry:hover {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
+  border-color: var(--pine);
+  color: var(--pine);
 }
 
 .chat__meta {
-  margin-top: 10px;
+  margin-top: var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
 }
-.chat__badge {
-  display: inline-block;
-  font-size: 12px;
-  padding: 2px 10px;
-  border-radius: 999px;
+
+.chat__trace-link {
+  margin-left: 0;
 }
-.chat__badge--data {
-  background: #eef5f3;
-  color: var(--c-primary);
+
+/* 答案类型标记 */
+.tag--data {
+  background: var(--pine-tint);
+  color: var(--pine);
+  border-color: var(--pine-tint-2);
 }
-.chat__badge--doc {
-  background: #fbf4e8;
-  color: var(--c-amber);
+.tag--doc {
+  background: var(--ochre-tint);
+  color: var(--ochre);
+  border-color: var(--ochre-line);
 }
-.chat__badge--hybrid {
-  background: #eef5f3;
-  color: var(--c-primary);
-  border: 1px solid #cfe0dc;
+.tag--hybrid {
+  background: var(--pine);
+  color: #fff;
+  border-color: var(--pine-deep);
 }
-.chat__badge--refusal,
-.chat__badge--clarify {
-  background: #f7eeee;
-  color: var(--c-red);
+.tag--refusal,
+.tag--clarify {
+  background: var(--vermilion-tint);
+  color: var(--vermilion);
+  border-color: #f0d9d2;
 }
 
 .chat__nosource {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
 }
 
+/* —— 依据 —— */
 .chat__evidence {
-  margin-top: 12px;
-  border-top: 1px solid var(--c-border);
-  padding-top: 10px;
+  margin-top: var(--sp-3);
+  border-top: 1px solid var(--rule-soft);
+  padding-top: var(--sp-3);
 }
 .chat__toggle {
   border: none;
   background: none;
-  color: var(--c-primary);
+  color: var(--pine);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   padding: 0;
 }
 .chat__counts {
-  color: var(--c-text-secondary);
+  color: var(--ink-3);
+  font-weight: 400;
   margin-left: 6px;
 }
 .chat__evidence-body {
-  margin-top: 10px;
+  margin-top: var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sp-3);
 }
 .chat__doc {
-  border-left: 2px solid var(--c-amber);
-  padding: 4px 0 4px 12px;
+  border-left: 2px solid var(--ochre);
+  padding: 2px 0 2px var(--sp-3);
 }
 .chat__doc-id {
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 600;
-  color: var(--c-amber);
+  color: var(--ochre);
+  letter-spacing: 0.04em;
 }
 .chat__doc-quote {
-  font-size: 13px;
-  color: var(--c-text);
+  font-size: var(--fs-sm);
+  color: var(--ink);
   margin-top: 2px;
+  line-height: 1.7;
   word-break: break-word;
 }
 .chat__data {
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: #fafbfa;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  background: var(--surface-sunk);
 }
 .chat__data-head {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
 }
 .chat__data-tool {
   font-weight: 600;
-  color: var(--c-primary);
+  color: var(--pine);
+  letter-spacing: 0.04em;
 }
 .chat__data-scope {
-  color: var(--c-text-secondary);
+  color: var(--ink-3);
   text-align: right;
 }
 .chat__data-result {
-  margin: 8px 0 0;
-  font-size: 12px;
-  font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  margin: var(--sp-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
-  color: var(--c-text);
+  color: var(--ink);
   max-height: 180px;
   overflow-y: auto;
 }
 .chat__data-note {
   margin-top: 6px;
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
 }
 .chat__empty {
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
 }
 
+/* —— 空状态 —— */
 .chat__welcome {
-  padding: 32px 8px;
+  padding: var(--sp-8) 0 var(--sp-10);
+  max-width: 680px;
+  margin: 0 auto;
+  text-align: center;
 }
+
 .chat__welcome-title {
-  font-size: 16px;
+  font-size: var(--fs-xl);
   font-weight: 600;
 }
+
 .chat__welcome-desc {
-  margin-top: 6px;
-  color: var(--c-text-secondary);
-  font-size: 13px;
-}
-.chat__examples {
-  margin-top: 16px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.chat__example {
-  border: 1px solid var(--c-border);
-  background: #fff;
-  border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 13px;
-  color: var(--c-text);
-  cursor: pointer;
-}
-.chat__example:hover {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
+  margin-top: var(--sp-2);
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
 }
 
+.chat__examples {
+  margin-top: var(--sp-6);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--sp-3);
+  text-align: left;
+}
+
+.chat__example {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+.chat__example:hover {
+  border-color: var(--pine);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.chat__example-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  background: var(--pine-tint);
+  color: var(--pine);
+}
+.chat__example-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* —— 输入区 —— */
 .chat__inputbar {
-  border-top: 1px solid var(--c-border);
-  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+  padding-top: var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sp-2);
 }
+
 .chat__input {
   width: 100%;
   resize: none;
-  border: 1px solid var(--c-border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-size: 14px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  font-size: var(--fs-md);
   font-family: inherit;
-  line-height: 1.5;
-  min-height: 52px;
-  background: #fff;
+  line-height: 1.6;
+  min-height: 56px;
+  background: var(--surface);
+  transition:
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
 }
 .chat__input:focus {
   outline: none;
-  border-color: var(--c-primary);
+  border-color: var(--pine);
   box-shadow: 0 0 0 3px rgba(23, 75, 70, 0.1);
 }
+
 .chat__actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: var(--sp-3);
 }
-.chat__new {
-  height: 34px;
-  padding: 0 16px;
-  border: 1px solid var(--c-border);
-  background: #fff;
-  border-radius: 8px;
-  font-size: 13px;
-  cursor: pointer;
+
+.chat__hint {
+  margin-right: auto;
+  font-size: var(--fs-2xs);
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
 }
-.chat__new:hover {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
-}
-.chat__send {
-  height: 34px;
-  padding: 0 20px;
-  border: none;
-  background: var(--c-primary);
-  color: #fff;
-  border-radius: 8px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.chat__send:disabled {
-  background: #9fb6b1;
-  cursor: not-allowed;
+
+@media (max-width: 760px) {
+  .chat__bar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-2);
+  }
+  .chat__hint {
+    display: none;
+  }
 }
 </style>

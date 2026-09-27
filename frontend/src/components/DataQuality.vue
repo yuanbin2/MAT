@@ -79,10 +79,13 @@ const maxReason = computed(() => {
           </div>
         </div>
 
+        <div class="dq__section-label eyebrow">剔除构成</div>
+
         <div class="dq__reasons">
           <div v-for="r in reasons" :key="r.key" class="dq__reason">
             <div class="dq__reason-head">
               <span class="dq__reason-label">{{ r.label }}</span>
+              <span class="dq__leader" aria-hidden="true"></span>
               <span class="dq__reason-count num">{{ formatNumber(report.removed[r.key] ?? 0) }} 行</span>
             </div>
             <div class="dq__bar">
@@ -98,7 +101,7 @@ const maxReason = computed(() => {
           <div class="dq__note-title">可恢复的格式问题（已规范化保留，未剔除）</div>
           <div class="dq__note-list">
             <span v-for="item in normalizedItems" :key="item.label" class="dq__note-item">
-              {{ item.label }} {{ formatNumber(item.value) }} 行
+              {{ item.label }} <span class="num">{{ formatNumber(item.value) }}</span> 行
             </span>
           </div>
         </div>
@@ -118,96 +121,123 @@ const maxReason = computed(() => {
   place-items: center;
 }
 
+/* 汇总格：2×2（本卡片位于窄栏） */
 .dq__summary {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-5);
 }
 
 .dq__stat {
-  background: #f8faf8;
-  border-radius: 8px;
-  padding: 12px 14px;
+  background: var(--surface-sunk);
+  border-radius: var(--r-md);
+  padding: 10px var(--sp-3);
 }
 
 .dq__stat-label {
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
 }
 
 .dq__stat-value {
-  margin-top: 6px;
-  font-size: 22px;
+  margin-top: 2px;
+  font-size: 18px;
   font-weight: 600;
+  line-height: 1.2;
+  color: var(--ink);
 }
 
 .dq__stat-value--keep {
-  color: var(--c-primary);
+  color: var(--pine);
 }
 
 .dq__stat-value--remove {
-  color: var(--c-red);
+  color: var(--vermilion);
+}
+
+.dq__section-label {
+  color: var(--ink-3);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--rule-strong);
+  margin-bottom: var(--sp-3);
 }
 
 .dq__reason {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
+/* 点线引导 */
 .dq__reason-head {
   display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  margin-bottom: 5px;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  margin-bottom: 3px;
 }
 
 .dq__reason-label {
-  color: var(--c-text);
+  color: var(--ink);
+}
+
+.dq__leader {
+  flex: 1;
+  min-width: 12px;
+  border-bottom: 1px dotted var(--rule-strong);
+  transform: translateY(-3px);
 }
 
 .dq__reason-count {
-  color: var(--c-text-secondary);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
 }
 
 .dq__bar {
-  height: 8px;
-  background: #eef1ee;
-  border-radius: 4px;
+  height: 5px;
+  background: #edece7;
+  border-radius: 2px;
   overflow: hidden;
 }
 
 .dq__bar-fill {
   height: 100%;
-  background: var(--c-red);
-  border-radius: 4px;
-  transition: width 0.3s;
+  background: var(--vermilion);
+  border-radius: 2px;
+  transition: width 300ms var(--ease);
 }
 
 .dq__note {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--c-border);
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-4);
+  border-top: 1px dashed var(--rule);
 }
 
 .dq__note-title {
-  font-size: 12px;
-  color: var(--c-amber);
+  font-size: var(--fs-xs);
+  color: var(--ochre);
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: var(--sp-2);
 }
 
 .dq__note-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--sp-2);
 }
 
 .dq__note-item {
-  font-size: 12px;
-  color: var(--c-text-secondary);
-  background: #fbf6ef;
-  border: 1px solid #efe3d2;
-  padding: 3px 10px;
-  border-radius: 999px;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+  background: var(--ochre-tint);
+  border: 1px solid var(--ochre-line);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+}
+
+@media (max-width: 520px) {
+  .dq__summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 </style>

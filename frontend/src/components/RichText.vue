@@ -11,8 +11,8 @@ const blocks = computed(() => parseRichText(props.text || ''))
   <div class="rich">
     <p v-for="(block, i) in blocks" :key="i" class="rich__block" :class="`rich__block--${block.kind}`">
       <template v-for="(segment, j) in block.segments" :key="j">
-        <strong v-if="segment.bold">{{ segment.text }}</strong>
-        <code v-else-if="segment.code" class="rich__code">{{ segment.text }}</code>
+        <strong v-if="segment.bold" class="rich__strong">{{ segment.text }}</strong>
+        <code v-else-if="segment.code" class="rich__code num">{{ segment.text }}</code>
         <template v-else>{{ segment.text }}</template>
       </template>
     </p>
@@ -22,32 +22,48 @@ const blocks = computed(() => parseRichText(props.text || ''))
 <style scoped>
 .rich {
   word-break: break-word;
-  line-height: 1.7;
+  line-height: 1.85;
 }
 .rich__block {
   margin: 0;
 }
 .rich__block + .rich__block {
-  margin-top: 3px;
+  margin-top: 4px;
 }
+
+/* 项目符号用朱色小方块，像账簿里的勾注 */
 .rich__block--bullet {
-  padding-left: 14px;
+  padding-left: var(--sp-4);
   position: relative;
 }
 .rich__block--bullet::before {
-  content: '·';
+  content: '';
   position: absolute;
-  left: 4px;
-  color: var(--c-text-secondary);
+  left: 2px;
+  top: 0.68em;
+  width: 4px;
+  height: 4px;
+  background: var(--vermilion);
+  border-radius: 1px;
 }
+
 .rich__block--heading {
   font-weight: 600;
-  margin-top: 8px;
+  color: var(--pine);
+  margin-top: var(--sp-3);
 }
+
+.rich__strong {
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .rich__code {
-  background: #f0f2f0;
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r-xs);
   padding: 0 4px;
-  font-size: 0.94em;
+  font-size: 0.92em;
 }
 </style>

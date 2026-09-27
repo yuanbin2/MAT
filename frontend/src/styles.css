@@ -1,19 +1,94 @@
+/* ==========================================================================
+   Moneki.ai 经营分析 —— 设计系统
+   深松绿 #174B46 主色 + 暖灰白底；标准运营后台的卡片体系：
+   白卡 + 发丝边 + 极浅投影，克制的朱/赭两色做业务标注。
+   ========================================================================== */
+
 :root {
-  /* 设计变量 —— 与第一关视觉方向保持一致 */
-  --c-primary: #174b46;
-  --c-primary-hover: #0f3935;
-  --c-bg: #f5f6f3;
-  --c-card: #ffffff;
-  --c-text: #24302e;
-  --c-text-secondary: #66736f;
-  --c-border: #e2e8e3;
-  --c-amber: #b97832;
-  --c-red: #b4534c;
-  --radius: 10px;
-  --radius-sm: 8px;
-  --shadow: 0 1px 2px rgba(23, 75, 70, 0.05), 0 2px 10px rgba(23, 75, 70, 0.04);
-  --font: 'PingFang SC', 'Microsoft YaHei', 'Source Han Sans SC', -apple-system,
-    BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color-scheme: light;
+
+  /* —— 底色 —— */
+  --paper: #f4f3ef; /* 内容区底：暖灰白 */
+  --surface: #ffffff; /* 卡片 */
+  --surface-sunk: #f7f6f2; /* 卡片内嵌区 */
+
+  /* —— 文字 —— */
+  --ink: #1f2d2a;
+  --ink-2: #57645f;
+  --ink-3: #6b746e;
+
+  /* —— 主色：深松绿 —— */
+  --pine: #174b46;
+  --pine-deep: #0f3733;
+  --pine-soft: #2c6b62;
+  --pine-tint: #eaf1ee;
+  --pine-tint-2: #d6e3de;
+
+  /* —— 业务标注色 —— */
+  --vermilion: #b0452f; /* 退款 / 剔除 / 错误 */
+  --vermilion-tint: #faeeea;
+  --sand: #e9b97a; /* 深底上的强调（侧栏激活点） */
+  --ochre: #8a5a16; /* 提示 / 文档来源 / 降级 */
+  --ochre-tint: #f9f1e2;
+  --ochre-line: #e4d3b0;
+
+  /* —— 线与影 —— */
+  --rule: #e3e1da;
+  --rule-soft: #eceae4;
+  --rule-strong: #cfd2ca;
+  --shadow-sm: 0 1px 2px rgba(31, 45, 42, 0.05);
+  --shadow-md: 0 1px 2px rgba(31, 45, 42, 0.05), 0 6px 20px rgba(31, 45, 42, 0.06);
+  --shadow-lg: 0 12px 40px rgba(23, 75, 70, 0.16);
+
+  /* —— 圆角 —— */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+
+  /* —— 间距（4pt） —— */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* —— 字号 —— */
+  --fs-2xs: 0.6875rem; /* 11 */
+  --fs-xs: 0.75rem; /* 12 */
+  --fs-sm: 0.8125rem; /* 13 */
+  --fs-md: 0.875rem; /* 14 */
+  --fs-lg: 1rem; /* 16 */
+  --fs-xl: 1.25rem; /* 20 */
+
+  /* —— 字体 —— */
+  --font-sans: 'PingFang SC', 'HarmonyOS Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC',
+    'Microsoft YaHei', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: Georgia, 'Times New Roman', 'Songti SC', 'STSong', 'Source Han Serif SC',
+    'Noto Serif CJK SC', 'SimSun', serif;
+  --font-mono: 'Cascadia Mono', 'JetBrains Mono', 'Sarasa Mono SC', Consolas, 'SF Mono',
+    ui-monospace, monospace;
+
+  /* —— 动效 —— */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur: 180ms;
+
+  /* 兼容旧变量名 */
+  --c-primary: var(--pine);
+  --c-primary-hover: var(--pine-deep);
+  --c-bg: var(--paper);
+  --c-card: var(--surface);
+  --c-text: var(--ink);
+  --c-text-secondary: var(--ink-2);
+  --c-border: var(--rule);
+  --c-amber: var(--ochre);
+  --c-red: var(--vermilion);
+  --radius: var(--r-lg);
+  --radius-sm: var(--r-sm);
+  --font: var(--font-sans);
 }
 
 * {
@@ -29,64 +104,227 @@ body,
 }
 
 body {
-  font-family: var(--font);
-  background: var(--c-bg);
-  color: var(--c-text);
-  font-size: 14px;
+  font-family: var(--font-sans);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--fs-md);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  font-kerning: normal;
 }
 
-button {
+button,
+input,
+select,
+textarea {
   font-family: inherit;
+  font-size: inherit;
+  color: inherit;
 }
 
-/* 通用卡片 */
+::selection {
+  background: var(--pine-tint-2);
+  color: var(--ink);
+}
+
+/* 细滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--rule-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-3);
+  background-clip: content-box;
+}
+
+:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   排版工具
+   -------------------------------------------------------------------------- */
+
+.eyebrow {
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.num {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: 'tnum' 1;
+  letter-spacing: -0.01em;
+}
+
+.muted {
+  color: var(--ink-2);
+}
+
+.serif {
+  font-family: var(--font-serif);
+}
+
+/* --------------------------------------------------------------------------
+   卡片：白卡 + 发丝边 + 极浅投影（管理后台的标准面板）
+   -------------------------------------------------------------------------- */
+
 .card {
-  background: var(--c-card);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
 }
 
 .card__header {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
-  padding: 16px 20px 0;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) 0;
 }
 
 .card__title {
   font-size: 15px;
   font-weight: 600;
-  color: var(--c-text);
+  color: var(--ink);
+  letter-spacing: 0.01em;
 }
 
 .card__subtitle {
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
 }
 
 .card__body {
-  padding: 16px 20px 20px;
+  padding: var(--sp-4) var(--sp-5) var(--sp-5);
 }
 
-/* 数值 */
-.num {
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+/* --------------------------------------------------------------------------
+   按钮
+   -------------------------------------------------------------------------- */
+
+.btn {
+  height: 36px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
 }
 
-.muted {
-  color: var(--c-text-secondary);
+.btn--primary {
+  background: var(--pine);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+.btn--primary:hover:not(:disabled) {
+  background: var(--pine-deep);
+}
+.btn--primary:disabled {
+  background: #aabbb7;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
-/* 骨架屏 */
+.btn--ghost {
+  background: var(--surface);
+  color: var(--ink-2);
+  border-color: var(--rule-strong);
+}
+.btn--ghost:hover:not(:disabled) {
+  border-color: var(--pine);
+  color: var(--pine);
+}
+.btn--ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--text {
+  height: 28px;
+  padding: 0 var(--sp-2);
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: color var(--dur) var(--ease);
+}
+.btn--text:hover {
+  color: var(--pine);
+}
+
+/* --------------------------------------------------------------------------
+   标记
+   -------------------------------------------------------------------------- */
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.tag--pine {
+  background: var(--pine-tint);
+  color: var(--pine);
+  border-color: var(--pine-tint-2);
+}
+.tag--ochre {
+  background: var(--ochre-tint);
+  color: var(--ochre);
+  border-color: var(--ochre-line);
+}
+.tag--vermilion {
+  background: var(--vermilion-tint);
+  color: var(--vermilion);
+  border-color: #f0d9d2;
+}
+.tag--muted {
+  background: var(--surface-sunk);
+  color: var(--ink-3);
+  border-color: var(--rule-soft);
+}
+
+/* --------------------------------------------------------------------------
+   骨架屏
+   -------------------------------------------------------------------------- */
+
 .skeleton {
-  background: linear-gradient(90deg, #eef1ee 25%, #f7f8f6 50%, #eef1ee 75%);
+  background: linear-gradient(90deg, #eef0ec 25%, #f6f7f4 50%, #eef0ec 75%);
   background-size: 200% 100%;
   animation: shimmer 1.4s ease infinite;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
 }
 
 @keyframes shimmer {
@@ -95,5 +333,31 @@ button {
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: rise 420ms var(--ease) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -14,7 +14,8 @@ const out =
 
 const browser = await launch(true)
 const page = await browser.newPage()
-await page.setViewport({ width: 1440, height: 960, deviceScaleFactor: 2 })
+// playwright-core 1.63 起 page.setViewport 已移除，统一用 setViewportSize。
+await page.setViewportSize({ width: 1440, height: 960 })
 
 const errors = []
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message))

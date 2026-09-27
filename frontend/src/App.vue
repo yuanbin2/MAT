@@ -168,15 +168,21 @@ onMounted(loadMeta)
 
     <div class="main">
       <header class="topbar">
-        <div>
+        <div class="topbar__lead">
           <h1 class="topbar__title">{{ view === 'overview' ? '经营总览' : 'AI 助手' }}</h1>
           <div v-if="view === 'overview'" class="topbar__sub">
-            <span>数据覆盖范围 <span class="num">{{ dataRange }}</span></span>
-            <span class="topbar__dot">·</span>
+            <span>数据覆盖 <span class="num">{{ dataRange }}</span></span>
+            <span class="topbar__dot" aria-hidden="true"></span>
+            <span>共 {{ stores.length }} 家门店</span>
+            <span class="topbar__dot" aria-hidden="true"></span>
             <span>当前报表区间 <span class="num">{{ appliedRange }}</span></span>
           </div>
         </div>
         <button v-if="view === 'overview'" class="glossary-btn" @click="glossaryOpen = true">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 5.5C8.8 4.4 7 4 4 4v11c3 0 4.8.4 6 1.5 1.2-1.1 3-1.5 6-1.5V4c-3 0-4.8.4-6 1.5Z" />
+            <path d="M10 5.5v11" />
+          </svg>
           指标口径
         </button>
       </header>
@@ -194,22 +200,27 @@ onMounted(loadMeta)
         />
 
         <div v-if="metaError" class="error-banner" role="alert">
-          <span>{{ metaError }}</span>
-          <button class="btn btn--ghost" @click="loadMeta">重试</button>
+          <span class="error-banner__mark" aria-hidden="true">!</span>
+          <span class="error-banner__text">{{ metaError }}</span>
+          <button class="btn--text error-banner__retry" @click="loadMeta">重试</button>
         </div>
 
         <div v-else-if="metricsError" class="error-banner" role="alert">
-          <span>{{ metricsError }}</span>
-          <button class="btn btn--ghost" @click="loadMetrics">重试</button>
+          <span class="error-banner__mark" aria-hidden="true">!</span>
+          <span class="error-banner__text">{{ metricsError }}</span>
+          <button class="btn--text error-banner__retry" @click="loadMetrics">重试</button>
         </div>
 
         <template v-if="hasData || hasLoadedMetrics">
           <MetricCards :data="summary" :loading="metricsLoading" />
-          <TrendChart :days="daily?.days ?? []" :loading="metricsLoading" />
-          <div class="grid-bottom">
-            <TopProducts :products="topProducts" :loading="metricsLoading" />
+
+          <!-- 趋势（主）+ 数据质量（辅）并排；Top10 独占一行 -->
+          <div class="grid-mid">
+            <TrendChart :days="daily?.days ?? []" :loading="metricsLoading" />
             <DataQuality :report="dataQuality?.cleaning_report ?? null" :loading="metaLoading" />
           </div>
+
+          <TopProducts :products="topProducts" :loading="metricsLoading" />
         </template>
 
         <div v-else-if="!metaLoading && !metaError" class="empty-state card">
@@ -244,131 +255,195 @@ onMounted(loadMeta)
   overflow: hidden;
 }
 
+/* —— 顶栏 —— */
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--sp-6);
   flex-shrink: 0;
-  padding: 18px 28px;
-  background: var(--c-card);
-  border-bottom: 1px solid var(--c-border);
+  padding: var(--sp-4) var(--sp-6);
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
   z-index: 10;
 }
 
 .topbar__title {
   margin: 0;
-  font-size: 20px;
+  font-size: var(--fs-xl);
   font-weight: 600;
   letter-spacing: 0.01em;
+  line-height: 1.3;
 }
 
 .topbar__sub {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: var(--sp-2);
   flex-wrap: wrap;
 }
 
+.topbar__sub .num {
+  color: var(--ink);
+}
+
 .topbar__dot {
-  color: var(--c-border);
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--rule-strong);
 }
 
 .glossary-btn {
-  border: 1px solid var(--c-border);
-  background: #fff;
-  color: var(--c-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--rule-strong);
+  background: var(--surface);
+  color: var(--ink-2);
   height: 34px;
-  padding: 0 14px;
-  border-radius: 8px;
-  font-size: 13px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  font-weight: 500;
   cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+
+.glossary-btn svg {
+  width: 15px;
+  height: 15px;
 }
 
 .glossary-btn:hover {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
+  border-color: var(--pine);
+  color: var(--pine);
 }
 
+/* —— 内容区 —— */
 .content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px 28px 32px;
+  padding: var(--sp-5) var(--sp-6) var(--sp-8);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--sp-4);
   max-width: 1440px;
   width: 100%;
   margin: 0 auto;
 }
 
-.content--chat {
-  gap: 0;
+/* 纵向 flex 容器里，任何面板都不许被压缩 */
+.content > * {
+  flex-shrink: 0;
 }
 
+.content--chat {
+  gap: 0;
+  padding-bottom: var(--sp-5);
+}
+
+/* 趋势（主）+ 数据质量（辅） */
+.grid-mid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr);
+  gap: var(--sp-4);
+  align-items: stretch;
+}
+
+/* —— 错误条 —— */
 .error-banner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  background: #fdf3f2;
-  border: 1px solid #efd7d4;
-  color: var(--c-red);
-  padding: 12px 16px;
-  border-radius: 8px;
-  font-size: 13px;
+  gap: var(--sp-3);
+  background: var(--vermilion-tint);
+  border: 1px solid #f0d9d2;
+  border-left: 3px solid var(--vermilion);
+  border-radius: var(--r-md);
+  padding: 10px var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--ink);
 }
 
-.btn {
-  height: 36px;
-  padding: 0 18px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-  white-space: nowrap;
-}
-
-.btn--ghost {
-  background: #fff;
-  color: var(--c-text);
-  border-color: var(--c-border);
-}
-
-.btn--ghost:hover {
-  border-color: var(--c-primary);
-  color: var(--c-primary);
-}
-
-.grid-bottom {
+.error-banner__mark {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
   display: grid;
-  grid-template-columns: 3fr 2fr;
-  gap: 16px;
-  align-items: start;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--vermilion);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
 }
 
+.error-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.error-banner__retry {
+  color: var(--vermilion);
+  border-bottom: 1px solid currentColor;
+  border-radius: 0;
+  padding-bottom: 1px;
+}
+.error-banner__retry:hover {
+  color: var(--pine);
+}
+
+/* —— 空状态 —— */
 .empty-state {
-  padding: 48px 24px;
+  padding: var(--sp-10) var(--sp-6);
   text-align: center;
 }
 
 .empty-state__title {
-  font-size: 16px;
+  font-size: var(--fs-lg);
   font-weight: 600;
 }
 
 .empty-state__desc {
-  margin-top: 8px;
-  color: var(--c-text-secondary);
-  font-size: 13px;
+  margin-top: var(--sp-2);
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 1200px) {
+  .grid-mid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 1100px) {
-  .grid-bottom {
-    grid-template-columns: 1fr;
+  .topbar,
+  .content {
+    padding-left: var(--sp-5);
+    padding-right: var(--sp-5);
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-3);
+  }
+  .topbar__sub {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .topbar__dot {
+    display: none;
   }
 }
 </style>
