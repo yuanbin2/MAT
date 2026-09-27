@@ -190,8 +190,8 @@
 - 前端 `npm run build` → 通过（vue-tsc 类型检查 + vite 构建）。
 - 回归脚本自测 `cd eval/tests && python -m unittest test_check_regression -v` → **10 passed**。
 
-> 这两个数字是**第四关当时**的状态，已被后面的验收修复轮推进：后端现为 **205 passed**、
-> 回归脚本自测 **15 passed**。最新数字见下一节。
+> 这两个数字是**第四关当时**的状态，已被后面的验收修复轮推进：后端现为 **237 passed**
+> （含文末复盘轮新增的 8 例）、回归脚本自测 **15 passed**。最新数字见下一节与文末复盘轮。
 
 ### 3. 自拟题（公开题未充分覆盖的风险）
 
@@ -199,10 +199,12 @@
 python eval/run_eval.py --base-url http://127.0.0.1:8000 --questions eval/extra_questions.jsonl
 ```
 
-- **25.00 / 25.00**（13 题全绿）。范围：问题改写（X01–X04）、追问隔离（X06）、
+- **29.00 / 29.00**（15 题全绿；交付时为 13 题 25.00/25.00，复盘轮补了 X14/X15 两道夹带句）。
+  范围：问题改写（X01–X04）、追问隔离（X06）、
   时间歧义反问（X07）、无数据拒答（X08）、门店+闭区间精确值（X09）、
   经营数字 vs 周报估算（X10，`cite_none KB-050`）、历史版本（X11，引用 KB-010）、
-  提示注入改写说法（X12/X13）。
+  提示注入改写说法（X12/X13）、**文档+数据夹在同一句（X14 引用 KB-013 + 7 月退款 494.00 元证据；
+  X15 引用 KB-001 口径 + 7 月净营业额 162414.00 元证据）**——后两道正是复盘轮 D41 的回归题。
 
 ### 4. 现场新增文档演练
 
@@ -260,6 +262,12 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py
 
 所以**没有改动索引文件**：提交里那份就是当前知识库的索引，用一个"重建后必然产生 diff"的假改动去
 凑一个提交反而会引入错误。真正要修的是**守门方式**（见下）。
+
+> ⚠️ **本节记录的是当时的快照，索引文件此后被替换过一次**：提交 `591c04a`
+> （知识库索引跨平台一致：换行归一 + 稳定排序）把 `.cache/index.json` 换成了字节级跨平台一致的版本。
+> **现行值**：sha256 `4015d3d1116ed2077d2d0398823ad5342f3cd5aa02246ee9c5881521a7293efa`、
+> 259776 字节、内容键 `fc3eebbb…`（`git show HEAD:` 与工作区一致，`git diff` 为空）。
+> 本节表格里的 `79ea5cf1bc24…` / 262302 字节 / `b0da151dbd8b` 是替换前的历史值，保留供对照。
 
 守门改进后，测试运行顺序再也不能靠"先重建一次"来掩盖提交里的旧缓存：
 
@@ -383,8 +391,8 @@ live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已
 | ③ 前端构建 | `npm run build` | 通过（vue-tsc + vite，6.66s） |
 | ④-a mock 公开题库 | `run_eval.py --base-url http://127.0.0.1:8004 --questions eval/public_questions.jsonl` | **100.00 / 100.00**（55/55） |
 | ④-a 回归门禁（全量严格） | `check_regression.py --report …/report.json` | 无回归，**退出码 0** |
-| ④-b mock 自拟题库 | `run_eval.py --questions eval/extra_questions.jsonl` | **25.00 / 25.00**（13/13） |
-| ⑤ 新增文档演练 | `drill_new_doc.py` | **13 / 13 PASS**；演练前后 `starter/.cache/index.json` sha256 均为 `79ea5cf1bc24…`，演练后 `git status` **仍为空** |
+| ④-b mock 自拟题库 | `run_eval.py --questions eval/extra_questions.jsonl` | **25.00 / 25.00**（当时 13/13；现行题库已扩到 15 题，见文末复盘轮） |
+| ⑤ 新增文档演练 | `drill_new_doc.py` | **13 / 13 PASS**；演练前后 `starter/.cache/index.json` sha256 均为 `79ea5cf1bc24…`（现行 `4015d3d1116e…`，见上一节注），演练后 `git status` **仍为空** |
 
 ## 关于 live 模式：三种状态分开报告
 
@@ -413,3 +421,50 @@ DeepSeek 仍是"未验证"，拿 Key 后复跑同一套命令即可（`eval/run_
 第三关前置加固已把 live 的**取证闸门**（数字/引用只认本轮证据、检索内容去指令化、证据 ≤ 4096 字节）
 与**可观察性**（完整模型请求与原始响应入 trace、Key 脱敏）做成 13 个打桩单元测试，
 接入真 Key 后可直接复跑；`eval/llm_gateway.py preflight` 自检留待第三关接入时完成（见 `LLM_SETUP.md`）。
+
+## 交付后复盘轮：D41（一句话问了两件事，只答一半）
+
+把整套代码当“接手材料”通读一遍，专找“文档里写了、测试没覆盖、于是从来没被执行过”的路径。
+发现并修掉一处：`planner` 把 `two_part` 写死成 `False`，`answerer._merge_doc_side` /
+`_merge_data_side` 两条“把另一半也答上”的路径从上线起就是死代码——「外卖订单多久内可以退款，
+7 月一共退了多少款？」只会答时限，退款金额那一半无声丢失。逐现象、假设、红证与修复见
+`DEBUG_LOG.md` 分层 11（D41）。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 新增回归测试（先红后绿） | `pytest tests/test_two_part_answers.py -q` | **8 passed**（修复前 3 failed / 5 passed；把 `planner` 改回 `two_part=False` → 同样 3 failed） |
+| 后端全量测试 | `pytest tests -q` | **237 passed**（6 skipped 为未装 make 的 Makefile 语义用例） |
+| mock 公开题库（全量） | `run_eval.py --base-url http://127.0.0.1:8000 --questions eval/public_questions.jsonl` | **100.00 / 100.00**（55/55） |
+| 回归门禁（全量严格） | `check_regression.py --report report.json --baseline eval/baseline_mock.json` | 无回归，**退出码 0** |
+| mock 自拟题库 | `run_eval.py --questions eval/extra_questions.jsonl` | **29.00 / 29.00**（15/15，新增 X14/X15） |
+| live 真机抽验（StepFun `step-5-preview`） | `POST /api/chat` 问同一道混合题 | `answer_type=hybrid`，目标/实绩/引用/trace 均正常（未跑全量，不报 live 分数） |
+| 新增文档演练 | `drill_new_doc.py` | **13 / 13 PASS**；跟踪索引 sha256 保持 `4015d3d1116e…` |
+| 前端构建 | `npm run build` | 通过（vue-tsc + vite） |
+
+## 交付后第二轮：D43（证据数字的**组合**上限）
+
+第一轮修的是"一句话问了两件事只答一半"；这一轮是拿 live 实测成绩反推代码边界。
+StepFun 跑公开题库时 T03 失分 1.5/3，查 trace 发现：模型同时调了 `top_products(limit=30)` 与
+`unit_price_check(全区间)`，**两条各自都合法，合起来 61 个数字**，越过契约"全部 result 数字 ≤ 60"。
+D40 只夹了单工具的 limit，没夹组合。同轮还发现一个潜伏项：公开题库没有"整月每天多少钱"这类题，
+所以整月 `daily_metrics`（≈93 个数字）一直没被拦过——隐藏题库一旦有就翻车。
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 新增回归测试（先红后绿） | `pytest tests/test_tools_readonly.py -q` | **42 passed**（新增 3 例；改回旧写法 → 2 例失败） |
+| 后端全量测试 | `pytest tests -q` | **240 passed** |
+| mock 公开题库（全量） | `run_eval.py --base-url http://127.0.0.1:8010 --questions eval/public_questions.jsonl` | **100.00 / 100.00**（55/55） |
+| 回归门禁（全量严格） | `check_regression.py --report report.json --baseline eval/baseline_mock.json` | 无回归，**退出码 0** |
+| mock 自拟题库 | `run_eval.py --questions eval/extra_questions.jsonl` | **29.00 / 29.00**（15/15） |
+| live 公开题库（修复后，StepFun） | `run_eval.py --base-url http://127.0.0.1:8000 --questions eval/public_questions.jsonl` | **97.00 / 100.00**（54/55，T03 已通过） |
+| 新增文档演练 | `drill_new_doc.py` | **13 / 13 PASS** |
+| 前端构建 | `npm run build` | 通过（vue-tsc + vite） |
+
+**live 剩余的那 3 分是模型行为，不是代码缺陷**：H06「S02 在 8 月 17 日到 19 日为什么一分钱营业额都没有？」
+期望 0 引用（知识库里确实没有解释），模型却引用了 3 份它自己都说明"不在本次时间段内"的文档
+（`cite_max` 判不合格）。mock 路径对这类题只引用真正覆盖时间窗的文档，所以 mock 100/100；
+live 路径目前不校验"引用的文档与结论是否相关"，这是记录在案的已知边界（见 `DEBUG_LOG.md` 末尾），
+不是本轮引入的回归——同一份代码上一轮 live 跑过 100/100。
+
+**没有回退**：mock 公开题库仍是 55/55 满分，逐题通过状态与基线完全一致（`check_regression.py`
+比的就是逐题状态，不只是总分）。

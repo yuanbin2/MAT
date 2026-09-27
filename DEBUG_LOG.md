@@ -708,6 +708,78 @@
 
 ---
 
+## 分层 12：交付后体验缺口（刷新丢会话）
+
+### D42 刷新页面后会话上下文丢失：`session_id` 每次进入都重新生成
+
+- **现象**：运营在「AI 助手」里问完「6 月的净营业额是多少？」，刷新一下页面再问「那 7 月呢？」，
+  得到的是反问「这句像是追问，但这个会话里没有上文」——后端明明还存着那段对话
+  （同一个 `session_id` 追问是可以补全的），是前端把会话标识弄丢了。
+- **假设**：先怀疑后端会话过期；用同一个 `session_id` 直接打接口复现，追问正常补全，排除后端。
+  再读 `ChatAssistant.vue` 的 `onMounted`——`sessionId.value = newSessionId()`，**每次挂载都换新 ID**，
+  且消息列表只是内存里的 `ref`，刷新即消失。
+- **验证（红）**：新增 `frontend/scripts/verify-chat-session.mjs`（playwright，7 项检查）：
+  提问 → 刷新 → 看历史是否恢复、`session_id` 是否不变、刷新后追问能否补全、点「新建会话」是否真的清空。
+  修复前：session_id 刷新后**变**、历史消息**不恢复**、刷新后追问**得不到补全**（3 项红）。
+- **根因**：`frontend/src/components/ChatAssistant.vue` 的 `onMounted` 无条件生成新 `session_id`；
+  消息记录不落盘。契约只要求"同一个 `session_id` 视为同一段对话"，没要求前端跨刷新保留——
+  所以这是**体验缺口**，不是契约违规。
+- **修复**：`session_id` 与消息记录存进 `sessionStorage`（按标签页隔离，不与其它标签页的对话串），
+  挂载时优先读回；「新建会话」把两者一起清掉；存不进去（隐私模式/超额）时静默降级成原行为。
+- **过程中踩到的 Vue 坑（值得记）**：第一版只加了 `watch(messages, …, { deep: true })`，
+  实测**回答那一半始终没落盘**。原因是 `send()` 里 `assistantMsg.text = resp.answer` 改的是
+  **push 进去的原始对象**，不是响应式代理——deep watch 只跟"通过代理的数组变更"（push/splice），
+  不跟裸对象赋值；界面能更新纯属 `sending = false` 顺带触发了重渲染。改成在 `send()` 的
+  `finally` 里显式调 `persistMessages()` 才稳。另外 `newChat()` 清空后，watch 的异步 flush 会把一个
+  空的 `[]` 又写回来，`persistMessages()` 里对空列表改为移除键收口。
+- **回归测试**：`frontend/scripts/verify-chat-session.mjs` **7/7 通过**（修复前 3 项红）；
+  后端 `pytest tests -q` **237 passed**（本轮未改后端，确认无牵连）；前端 `npm run build` 通过
+  （vue-tsc + vite）；看板侧的 `verify-filter.mjs` 复跑确认 UI 重写后筛选仍正常。
+
+---
+
+## 分层 13：证据数字的**组合**上限（D40 只堵了单工具）
+
+### D43 两条证据各自不超限，合起来超限：`evidence_hygiene` 的 60 个数字是**全局**账
+
+- **现象**：用 StepFun `step-5-preview` 跑公开题库，T03「牛肉poke 现在多少钱一份？」失分
+  1.5/3。查 trace（`t-20260901-1122`）：模型调了 `top_products(limit=30)` 与
+  `unit_price_check(P06, 全区间)`，两条各自都合法，但评测报
+  `evidence_hygiene: 全部 result 里一共 61 个数字，超过 60`。
+- **假设**：先以为 D40 的 `MAX_TOP_PRODUCTS=10` 没生效；重放确认 10 条没问题（30 个数字）。
+  真正的来源是 `unit_price_check` 的 `by_store` 字段——长区间里价格本身就变过，按门店汇总出的
+  直方图没有意义，却一次贡献三十来个数字。**单条不超限 ≠ 组合不超限**，这是 D40 漏掉的一层。
+- **验证（红）**：新增 3 例（`tests/test_tools_readonly.py`）：
+  - `test_price_question_evidence_stays_within_number_budget`：按 trace 里的真实参数重放两条工具，
+    合计必须 ≤ 60（修复前 **61**，红）；
+  - `test_unit_price_check_per_store_only_for_short_windows`：长区间不给 `by_store`、
+    单日仍要给（修复前长区间也带，红）；
+  - `test_daily_metrics_evidence_is_bounded`：整月 `daily_metrics` 作为证据必须 ≤ 60
+    （修复前 **93**，红）——这一条公开题库里没有对应题型，是**潜伏**的，隐藏题库一旦有
+    "7 月每天多少钱"就翻车。
+- **根因**：`tools.py::unit_price_check` 无条件带 `by_store`；`daily_metrics` 的逐日明细
+  作为证据时没有天数上限（`Answerer._call` 只在 > 31 天时截断，而 31 天本身就已经 93 个数字）；
+  live 路径的 `service.run_tool` 更是完全没有这道裁剪。
+- **修复**（5 处，都在"有界读取"这一个原则下）：
+  1. `sqlguard.py` 新增 `MAX_EVIDENCE_NUMBERS = 60`（契约上限写进代码）与
+     `fit_daily_evidence()`：逐日证据最多留 `MAX_DAILY_EVIDENCE_DAYS = 7` 天，并附 `days_total`
+     说明一共多少天——**回答本身也只列 7 天**（`render.describe_daily`），证据没理由比回答还全；
+  2. `tools.py::unit_price_check` 只在区间 ≤ `PRICE_BY_STORE_MAX_DAYS = 31` 天时给 `by_store`；
+  3. `answerer._call` 与 `service.run_tool`（live 路径）都走 `fit_daily_evidence`，两条路径同一套裁剪；
+  4. `hybrid._answer_price_as_of` 补兜底：长区间没有 `by_store` 时，改说"区间内观测到的实收单价有…"，
+     不能输出一句空话。
+- **回归测试**：`tests/test_tools_readonly.py` **42 passed**（新增 3 例）；后端全量 **240 passed**；
+  mock 公开题库 **100.00/100** 且 `check_regression.py` 退出码 0；自拟题库 **29.00/29**；
+  新增文档演练 13/13；前端构建通过。红证：把 `unit_price_check` 的区间规则改回旧写法 → **2 例失败**。
+- **数字对比（契约口径，即评测脚本 `extract_numbers`）**：T03 组合 **61 → 39**；
+  整月 `daily_metrics` **93 → 22**；逐日+汇总组合 **104 → 27**。
+- **顺带**：测试一开始用"把所有数字都数上"的严口径，得出 65 > 60 的假红——契约与评测脚本都
+  **不把日期和编号算作答案数字**。改成直接借 `eval/run_eval.py` 的 `extract_numbers`
+  （导入时要注册进 `sys.modules`，否则模块里的 `@dataclass` 解析字符串注解会炸），
+  让测试与评测同一套口径，否则只会为了迁就偏严的指标去砍本来够用的能力。
+
+---
+
 ## 尚未解决 / 已知边界
 
 - **StepFun 账号未实名，live 分数被 403 压着**（公开 36.00/100、自拟 12.00/25，失分全为 403）。
@@ -724,3 +796,61 @@
   `sqlite_*`/`pragma_*` 内部对象，但真正的最后防线仍是连接层的 `mode=ro`——两者同时生效，任一层单独都不足。
 - live 的“数字必须来自真实查询”是**面向数值的白名单**：日期类写法与编号（S02/P06/KB-013）不参与校验，
   因此日期本身不需要证据支撑；这是一处有意的取舍，不是漏洞。
+- **live 允许模型引用与结论无关的文档**：`live._citations` 只校验"本轮检索到过、不是周报估算、
+  能逐字引用"，不校验"这份文档与答案的结论是否相关"。实测后果：H06 期望 0 引用（知识库里没有
+  解释），模型引用了 3 份自己都说明不在时间段内的文档，`cite_max` 判不合格。mock 路径对这类题
+  只引用真正覆盖时间窗的文档（`hybrid._covers_window`），所以不受影响。这是已知边界，未修。
+- **证据数字的组合上限目前靠"每个工具各自有界"保证**：D40/D43 把 `top_products`、`daily_metrics`、
+  `unit_price_check` 都做到了有界，两两组合也验过（≤ 60）；但没有一个"合起来超了就裁"的总闸门。
+  若模型一次调三种都很啰嗦的工具，理论上仍可能越过 60——真出现时按 trace 里的工具参数定位到具体组合，
+  再把对应的那个工具收严，和 D40/D43 是同一个套路。
+
+---
+
+## 分层 11：交付后通读复盘（死代码与夹带句）
+
+> 这一轮是把整套代码当“接手材料”通读一遍，专找“文档里写了、测试没覆盖、于是从来没被执行过”的路径。
+> 结论：**一处开关被写死，两条合并路径从上线起就是死代码。**
+
+### D41 `two_part` 被写死成 `False`：一句话问了两件事，只答一半
+
+- **现象**：`planner._choose_kind()` 末尾是 `plan.slots["two_part"] = False`，全库没有任何地方把它置真；
+  而 `answerer._merge_doc_side` / `_merge_data_side` 两个方法都以它为前提——两条“把另一半也答上”的路径
+  从来不会执行。用真实问题复现（mock 模式起服务后逐条问）：
+
+  | 问题 | 修复前 | 应该是什么 |
+  |---|---|---|
+  | 外卖订单多久内可以退款，7 月一共退了多少款？ | `doc`，`data_evidence=[]`——退款金额那一半无声丢失 | `hybrid`：KB-013 引用 + 7 月退款 494.00 元的查询证据 |
+  | 会员充值的规定是什么，8 月储值支付占比多少？ | `doc`，`data_evidence=[]` | `hybrid`：KB-011 引用 + `payment_mix` 证据 |
+  | 7 月净营业额是多少，口径怎么算？ | `data`，`citations=[]` | `hybrid`：数字 + KB-001 口径引用 |
+
+  也就是说，第三关“两样都要”的硬性要求其实只由 `target`/`price`/`anomaly` 三类题型扛着，
+  其余夹带句全部落空——评测题库里恰好没有这类问法，所以 100 分一直没暴露它。
+- **假设**：先怀疑两个 merge 方法本身写错；读代码发现它们的逻辑是对的（一个拼数据、一个拼文档），
+  问题在**开关从来没被打开**。第二个可疑点是 `entities.METRIC_WORDS` 的退款词表缺“退了多少”，
+  导致“7 月一共退了多少款”连指标都识别不出来，即使打开开关也会按净营业额答。
+- **验证（红，修复前实测）**：新增 `starter/tests/test_two_part_answers.py` 8 例，其中 3 例失败、
+  5 例通过——通过的 5 例是**守门**：纯文档题不得顺手查库、纯数据题不得顺手引用、
+  单句里“净营业额怎么算”这种指标词+规定词同句的不算两件事。修复后 8 例全绿；
+  把 `planner` 改回 `two_part = False` → 同样 3 例失败（红证，见下）。
+- **根因**：`starter/kbqa/planner.py` `_choose_kind()` 的 `plan.slots["two_part"] = False`（写死）；
+  `starter/kbqa/entities.py` `METRIC_WORDS` 退款指标缺“退了多少”。
+- **修复**（4 处，都在规划与组装的边界上，没动取数与检索本身）：
+  1. `planner` 新增 `_two_part_sides()`：把问句按分句拆开，**不同分句**分别只命中文档信号
+     （规定/为什么/异常/别名）与数据信号（指标词/支付/排名）时才算两半都问了。同句两种信号
+     同时出现（“净营业额怎么算”）问的是口径本身，不拆；分句里只有“多少/几”没有指标或排名说法
+     （“有多少条”）不算数据信号——投诉条数这类事数据库里根本没有（S01 就是这道题，不能碰）。
+  2. `planner` 新增 `_data_side_kind()`：夹带的数据那一半按同一套词表选取数方式
+     （支付占比→`payment_mix`、排名→`top_products`、分店→`by_store`……），不能一律按净营业额糊弄。
+  3. `answerer._merge_data_side` 改为按该 kind 走 `_answer_data`；并且**文档那一半拒答时也给出数据这一半**
+     （一句话问了两件事，一半不知道不该把另一半一起咽掉），拒答原因留在 `notes`、回答里明说。
+  4. `entities.METRIC_WORDS` 退款指标补“退了多少”。
+  5. 自拟题库补 X14/X15 两道夹带句（`eval/extra_questions.jsonl`，13 → 15 题，25 → 29 分）。
+- **回归测试**：`tests/test_two_part_answers.py` 8 例；后端全量 **237 passed**（原 229 + 8）；
+  公开题库 **100.00/100** 且 `check_regression.py` 退出码 0；自拟题库 **29.00/29**。
+  红证：临时把 `planner` 改回 `two_part = False` 跑同一文件 → **3 failed, 5 passed**，还原后 8 passed。
+- **顺带修掉自己引入的一个坑**：给自拟题库追加题目时，用 Python 以默认模式写文件，Windows 上把
+  LF 翻成了 CRLF，`git diff --stat` 显示“15 insertions, 13 deletions”（整文件被替换）——本项目对
+  换行一致有明确要求（`read_text_normalized` 就是为它存在的），当即以 `newline=""` + 显式 `\n` 重写归回 LF，
+  diff 恢复成 2 行新增。**在 Windows 上改任何被跟踪的文本文件，写完都要看一眼 diff 行数。**
+

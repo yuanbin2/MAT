@@ -139,6 +139,7 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py     # 11 项全 PASS
 | 某题查不到文档 | 知识库检索（hits 为空 / filtered 有它） | 装载丢了扩展名、切块丢尾、版本过滤过早、分词无交集 |
 | 引用了不相干的句子 | 知识库检索 → answer.citations | 候选句排序方向、整篇文档当引用、命中了周报估算 |
 | 回答里出现没查到的数字 | 工具与数据（accepted 状态） | 数字核验被绕过、白名单来源过宽 |
+| 一句话问了两件事只答了一半 | 问题理解（`two_part` / `data_side_kind`） | 分句识别漏判：改 `planner._two_part_sides`；取数方式不对就改 `_data_side_kind` |
 | live 回答被换成本地模板 | 模型与异常（errors） | 模型输出数字无依据、超时、`finish_reason` 异常 |
 | trace 打不开 | 概览 / 面板状态 | trace 超出保留条数、ID 写错（面板会提示「不存在或已过期」） |
 | 并发问答记录串了 | 概览（trace_id / question） | 不该出现的共享 `current_trace`（本项目没有，用参数传递） |
