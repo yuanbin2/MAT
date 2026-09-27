@@ -1,6 +1,9 @@
 # EVAL_REPORT.md
 
-公开题库的评测记录。全部为**无 LLM Key 的 mock 降级模式**实测，未配置任何模型 Key。
+评测记录总档：**mock 降级模式**（无 Key，本地规划+检索+模板）与**真实 live**（配置了模型 Key，
+对真实接口跑完整题库）分开报告，不互相顶替。mock 部分不需要任何 Key；live 部分当前有三个
+模型的成绩——StepFun `step-5-preview`、小米 MiMo `mimo-v2.5-pro`、DeepSeek `deepseek-flash`
+（评审配置）。
 
 ## 运行环境
 
@@ -161,10 +164,10 @@
 实绩来自真实 `query_metrics`（销量 125 / 净营业额 3625.00），目标值来自 KB-023 的逐字引用，
 界面同屏展示两类证据（截图见 `docs/screenshots/assistant-hybrid.png`，完整流程见 `DEMO.md`）。
 
-> **真实 live 未验证**：本机没有 DeepSeek Key，以上全部为预检（fake 模型）与单元桩件结果，
-> 绝不把 mock 成绩写成 live。真实模型分数需配置 Key 后另跑。
-> 说明：live 桩件用打桩替掉模型，验证的是**代码侧的取证闸门与脱敏**，不代表真实模型的回答质量；
-> 真实模型分数需配置 Key 后另跑（见下方“关于 live 模式”）。
+> **真实 live 已验证（DeepSeek）**：本节为 mock 模式实测。评审配置的 DeepSeek `deepseek-flash`
+> 真实 live 全量评测已补跑——公开题库 **100.00/100**、自拟题库 **27.00/29**，逐题结果见
+> `docs/eval/deepseek-live-public-v1.json` / `deepseek-live-extra-v1.json`（详见下文第 4 节）。
+> 说明：live 桩件用打桩替掉模型，验证的是**代码侧的取证闸门与脱敏**，不代表真实模型的回答质量。
 
 ## 第四关：可调试性验收
 
@@ -374,7 +377,61 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py
 **live 与 mock 各自独立**：两次 live 报告都**没有**跑 `check_regression.py`（那份基线是 mock 的），
 也不把 mock 的 100 分当作任何 live 成绩。
 
-### 4. 界面上的 `**43,655 元**`
+### 4. DeepSeek live 全量评测（模型 `deepseek-flash`，评审配置）：公开 100 / 100、自拟 27 / 29
+
+本节验证的就是**评审配置**（`docs/API_CONTRACT.md` 7.2：`LLM_BASE_URL=https://api.deepseek.com`、
+`LLM_MODEL=deepseek-flash`、评审自己的 Key）。代码零改动，只把模型三件套写进仓库根 `.env`
+（已被 `.gitignore` 忽略）起服务，跑同一套命令。逐题结果同样脱敏入库。
+
+| 题库 | 总分 | 全绿 | 报告 | 脱敏逐题结果 |
+|---|---|---|---|---|
+| 公开（55 题） | **100.00 / 100.00** | 55/55 | `eval/reports/deepseek_live_public_v1/` | **`docs/eval/deepseek-live-public-v1.json`** |
+| 自拟（15 题） | **27.00 / 29.00** | 14/15 | `eval/reports/deepseek_live_extra_v1/` | **`docs/eval/deepseek-live-extra-v1.json`** |
+
+- **运行命令**（与前三节完全相同，只换了 `.env` 里的三件套）：
+  ```bash
+  python eval/run_eval.py --base-url http://127.0.0.1:8001 \
+      --questions eval/public_questions.jsonl --out eval/reports/deepseek_live_public_v1
+  python eval/run_eval.py --base-url http://127.0.0.1:8001 \
+      --questions eval/extra_questions.jsonl --out eval/reports/deepseek_live_extra_v1
+  ```
+- **live 真实性**：`/api/health` 的 `llm_mode=live`；抽查 trace（例 `t-20260901-1294`），
+  三次模型调用全部命中 `deepseek-flash` @ DeepSeek 官方端点、HTTP 200，`model_called=true`。
+- **速度**：公开题库整轮 421.1 秒（中位数 0.07 秒，最慢 47.4 秒——思考模式 + 两三轮工具调用的
+  慢题集中在 H/T/V 类）；自拟题库整轮 73.6 秒（中位数 5.96 秒）。
+
+**公开题库分类得分（满分 100）——十类全满**：
+
+| 类别 | 得分 | | 类别 | 得分 |
+|---|---|---|---|---|
+| metrics | 6.00 / 6.00 | | hybrid | 18.00 / 18.00 |
+| retrieval | 15.00 / 15.00 | | multi_turn | 9.00 / 9.00 |
+| data | 12.00 / 12.00 | | refusal | 8.00 / 8.00 |
+| doc | 16.00 / 16.00 | | safety | 9.00 / 9.00 |
+| version | 6.00 / 6.00 | | health | 1.00 / 1.00 |
+
+自拟题库分类：retrieval 4/4、data 4/4、doc 2/2、version 2/2、multi_turn 3/3、refusal 4/4、
+safety 6/6、**hybrid 2/4**。
+
+**唯一失分题 X14（自拟，hybrid 2 分）——先查 trace 再记录**：
+
+| 题号 | 问题 | 未通过检查 | 究竟发生了什么 |
+|---|---|---|---|
+| `X14` | 外卖订单多久内可以退款，7 月一共退了多少款？ | `fact_all`、`cite_all` | 期望引用 KB-013 并提到"送达后 24 小时"的受理窗口（`KB-013#2`）。模型两次检索（`外卖订单退款政策 多久内可以退款`、`第三方外卖平台订单 退款 时效 时间限制 申请期限`）只带回 KB-013 的 **#4、#5** 两个片段（系统记录 / 原路返回），#2 始终没进上下文；模型据此如实说"没有找到时效条款"，改引 KB-011 的储值卡 30 天规则并主动说明那不是外卖订单。**数据那一半是对的**（7 月退款 494.00 元，证据齐） |
+
+这与 MiMo 的 C04 **同一类**：答案就在知识库里，只是那一轮没被检索回来——差异在模型选的
+检索关键词，不在代码（同一份代码下 StepFun 两题都过）。反过来，DeepSeek 在 MiMo 失分的 C04
+和记录在案的已知边界 H06（模型引用与结论无关的文档）上都通过：H06 它 0 引用并明说
+"知识库里没有找到能解释这段时间的通知或说明"。
+
+> **自拟题库口径已变**：D41 之后自拟题从 13 题（25 分）扩到 15 题（29 分，新增 X14/X15 两道
+> 夹带句），所以 DeepSeek 的 27/29 与 StepFun/MiMo 的 25 分制成绩**不能直接比大小**。
+
+**live 与 mock 各自独立**：本轮同样**没有**跑 `check_regression.py`（那份基线是 mock 的），
+也不把 mock 的 100 分当作 live 成绩。至此「关于 live 模式」表格里 DeepSeek 一行从"未验证"
+变为**有真实成绩**：评审配置在本机用真实 Key 复跑通过。
+
+### 5. 界面上的 `**43,655 元**`
 
 live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已改为安全的结构化渲染：
 新增 `frontend/src/markdown.ts`（解析 `**粗体**`、`` `代码` ``、`#` 标题、`-` 列表 → 输出 Block/Segment），
@@ -382,7 +439,7 @@ live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已
 （`grep -rn v-html src/` 无实际使用），模型回答属于外部输入，这条边界不松。
 落单的 `**`（奇数个）会被去掉，宁可少一处加粗也不让回答里冒出星号。
 
-### 5. 干净检出中的最终验证（`git worktree` 独立目录，`git status` 为空）
+### 6. 干净检出中的最终验证（`git worktree` 独立目录，`git status` 为空）
 
 | 项 | 命令 | 结果 |
 |---|---|---|
@@ -404,19 +461,22 @@ live 回答里的 `**43,655 元**` 曾被原样显示成带星号的文本。已
 | **模型桩件 / 预检** | 用假模型或打桩替掉模型，验证**接线与代码侧闸门** | **有**：预检 13 PASS + 1 未检查（P14） | `LLM_SETUP.md` 第 7 节、`tests/test_live_*.py`、`tests/test_llm_trace.py` |
 | **真实 live（StepFun）** | 连真实模型跑完整题库 | **有**：公开 **100.00/100**、自拟 25.00/25（模型 `step-5-preview`，提交 `0cd3ab1`） | `eval/reports/stepfun_live_public_v6/`、`eval/reports/stepfun_live_extra_v5/` |
 | **真实 live（小米 MiMo）** | 连真实模型跑完整题库（第二轮，未改代码） | **有**：公开 **98.00/100**、自拟 23.00/25（模型 `mimo-v2.5-pro`，提交 `ce37e1c`） | `eval/reports/mimo_live_public_v1/`、`eval/reports/mimo_live_extra_v1/` |
-| **真实 live（DeepSeek）** | 连评审配置的 DeepSeek 跑公开题库 | **仍未验证** | 见下 |
+| **真实 live（DeepSeek）** | 连评审配置的 DeepSeek 跑完整题库 | **有**：公开 **100.00/100**、自拟 27.00/29（模型 `deepseek-flash`，提交 `baaff6c`） | `eval/reports/deepseek_live_public_v1/`、`deepseek_live_extra_v1/`、`docs/eval/deepseek-live-*.json` |
 
-**DeepSeek 仍未验证**：本机从未对 `https://api.deepseek.com` 跑过公开评测，没有任何 DeepSeek 分数。
-`LLM_SETUP.md` 里的接入步骤、`eval/llm_gateway.py preflight`、以及 live 侧的 13 个打桩单元测试都就绪，
-拿到 Key 后可直接复跑。预检的 **P14 是「未检查」，不是通过**（原因见 `LLM_SETUP.md` 第 7 节：预检的
+**DeepSeek 已验证**：评审配置的 `deepseek-flash` 已用真实 Key 跑完两套题库——公开
+**100.00/100**（55/55 全绿，十类满分）、自拟 **27.00/29**（唯一失分题 X14：24 小时受理窗口
+所在的 KB-013#2 两轮检索都没回来，模型如实说"没找到"并改引 KB-011，数据一半正确）。这同时
+验证了契约 7.2 的核心要求：**切到 DeepSeek 不用改代码**，只换 `.env` 里的三个环境变量。
+预检的 **P14 仍是「未检查」，不是通过**（原因见 `LLM_SETUP.md` 第 7 节：预检的
 中性问题合成出的工具参数被 Plan 范围校验拒绝，`normal`/`slow` 只产出 refusal，没有素材断言
 “保持连接没弄坏正文”）。
 
 **StepFun / MiMo 的成绩不能写成 DeepSeek 的成绩**：三者模型不同、接入端点也不同。
-这两份分数的意义是"live 链路在**多个真实模型**上都跑通了，并暴露出 5 个真 bug"，
+这些成绩的意义是"live 链路在**多个真实模型**上都跑通了，并暴露出 5 个真 bug"，
 且给出了一条基线：**换模型不是免费的**——同一份代码从 StepFun 换到 MiMo，公开题库掉 2 分
-（doc 类的 C04）、自拟掉 2 分（ refusal 类的 X07），失分点都在模型的检索深度与追问判断上。
-DeepSeek 仍是"未验证"，拿 Key 后复跑同一套命令即可（`eval/run_eval.py --base-url …`）。
+（doc 类的 C04）、自拟掉 2 分（ refusal 类的 X07），失分点都在模型的检索深度与追问判断上；
+换到 DeepSeek 公开题库满分、自拟 27/29（X14 的 24 小时条款没被检索回来，与 C04 同类）。
+三个模型各自的成绩如实分列，不互相顶替。
 
 第三关前置加固已把 live 的**取证闸门**（数字/引用只认本轮证据、检索内容去指令化、证据 ≤ 4096 字节）
 与**可观察性**（完整模型请求与原始响应入 trace、Key 脱敏）做成 13 个打桩单元测试，

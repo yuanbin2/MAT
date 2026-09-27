@@ -215,8 +215,11 @@ cd starter && .venv/Scripts/python ../eval/drill_new_doc.py                     
   两半都会答：规划器按**分句**识别（`planner._two_part_sides`），只有不同分句分别只命中文档信号与
   数据信号时才合并，所以“净营业额怎么算”这种同句问不会被误判成两件事。live 模式下两类来源由模型
   自行编排工具，不经过这条合并路径。
-- 真实 live（对 DeepSeek 真实接口跑公开评测）**未验证**——本机没有 Key；
-  模型接线已用预检（fake 模型）与单元桩件验证到 P1–P13 全过，见 `LLM_SETUP.md`。
+- 真实 live 已对**评审配置的 DeepSeek `deepseek-flash`** 跑过完整题库：公开题库 **100.00/100**
+  （55/55 全绿）、自拟题库 **27.00/29**（唯一失分题 X14：24 小时受理窗口所在的 KB-013#2
+  两轮检索都没回来，模型如实回答"没找到"，数据一半正确）。逐题脱敏结果见
+  `docs/eval/deepseek-live-public-v1.json` / `deepseek-live-extra-v1.json`，另有 StepFun
+  （100/100）与 MiMo（98/100）两份对照。模型接线另有预检（fake 模型）与单元桩件守门，见 `LLM_SETUP.md`。
 - live 模式的回答核验失败时会回退到本地 Answerer 的模板回答（trace 里标明原因），
   因此 live 的回答质量受检索质量影响；检索为纯 BM25 + 别名扩写，无向量检索。
 - 证据数字的**组合**上限靠"每个工具各自有界"保证：`top_products` 最多 10 条、逐日明细作为证据最多

@@ -153,8 +153,14 @@ P14   保持连接的空行与 SSE 注释没有把服务弄坏                  
 
 ## 8. 已知限制
 
-- **真实 live 未验证**：本机没有 DeepSeek Key，以上全部为预检（fake 模型）与单元桩件结果，
-  未对真实 `https://api.deepseek.com` 跑过 live 公开评测，不把 mock 成绩当 live。
+- ~~**真实 live 未验证**~~ **已补跑（2026-09-27）**：按本文第 2 节配好三件套
+  （`LLM_BASE_URL=https://api.deepseek.com`、`LLM_MODEL=deepseek-flash`、真实 Key 写进仓库根
+  `.env`），零代码改动跑完两套题库——公开题库 **100.00/100**（55/55 全绿，十类满分）、
+  自拟题库 **27.00/29**（唯一失分题 X14：24 小时受理窗口所在的 KB-013#2 两轮检索都没回来，
+  模型据此如实回答"没找到时效条款"并给出正确的数据一半）。逐题脱敏结果见
+  `docs/eval/deepseek-live-public-v1.json` 与 `docs/eval/deepseek-live-extra-v1.json`，
+  分数与复跑命令见 `EVAL_REPORT.md` 第 4 节。预检（fake 模型）与打桩单元测试仍然有效——
+  它们守的是"接线与代码侧闸门"，真实 live 守的是"模型答得对"，两者互不替代。
 - 预检工具自述其行为全部来自官方文档、未对照真实接口（见 `eval/README_llm_gateway.md` 第四节），
   若真实接口行为不同（尤其 400/422 的正文结构、`usage` 位置），请以真实为准并反馈。
 - 检索是纯 BM25 + 别名扩写，未引入向量检索；跨语言靠别名词典覆盖公开题库，

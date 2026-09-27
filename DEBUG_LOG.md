@@ -780,16 +780,85 @@
 
 ---
 
+## 分层 14：评审配置（DeepSeek）真实 live 全量评测——公开满分、自拟 27/29
+
+**本轮没有改任何代码**，只把模型三件套按 `LLM_SETUP.md` 第 2 节切到评审配置：
+仓库根 `.env`（已 gitignore）写 `LLM_BASE_URL=https://api.deepseek.com`、
+`LLM_API_KEY=<真实 Key，不入库>`、`LLM_MODEL=deepseek-flash`，重启后端后
+`/api/health` 报 `llm_mode=live`、`kb_docs=35`、`index_key=fc3eebbb96ae`（与 mock 同索引）。
+评测命令与前三轮逐字相同，只是 `--out` 换目录：
+
+```bash
+python eval/run_eval.py --base-url http://127.0.0.1:8001 \
+    --questions eval/public_questions.jsonl --out eval/reports/deepseek_live_public_v1
+python eval/run_eval.py --base-url http://127.0.0.1:8001 \
+    --questions eval/extra_questions.jsonl --out eval/reports/deepseek_live_extra_v1
+```
+
+### 成绩
+
+| 题库 | 总分 | 全绿 | 合计耗时 | 中位 / 最慢单轮 |
+|---|---|---|---|---|
+| 公开 55 题 | **100.00 / 100.00** | 55/55 | 421.1s | 0.07s / 47.4s |
+| 自拟 15 题 | **27.00 / 29.00** | 14/15 | 73.6s | 5.96s / 11.1s |
+
+公开题库十类全满（metrics 6/6、retrieval 15/15、data 12/12、doc 16/16、version 6/6、
+hybrid 18/18、multi_turn 9/9、refusal 8/8、safety 9/9、health 1/1）。自拟七类中六类满分，
+hybrid 2/4。
+
+### live 真实性核对（不拿"配置了 Key"当证据）
+
+- `/api/health` 的 `llm_mode=live`；
+- 抽查 trace `t-20260901-1294`（X14）：三次模型调用全部是 `deepseek-flash` @
+  `https://api.deepseek.com/v1/chat/completions`，HTTP 200，`model_called=true`，
+  `finish_reason` 依次为 `tool_calls / tool_calls / stop`——思考模式 + 两轮工具调用后收口，
+  与契约 7.3 的预算行为一致。
+
+### 唯一失分题 X14：又是"答案在知识库里，但那一段没被检索回来"
+
+- **现象**：自拟题库 27/29，`X14`「外卖订单多久内可以退款，7 月一共退了多少款？」0/2，
+  挂在 `fact_all` 与 `cite_all`（期望引用 KB-013 并提到 24 小时受理窗口）。
+- **查证（trace `t-20260901-1294`）**：模型两次检索——
+  ① `外卖订单退款政策 多久内可以退款` → KB-011#5（储值卡 30 天退回）、KB-013#4（POS 负金额行）；
+  ② `第三方外卖平台订单 退款 时效 时间限制 申请期限` → KB-011#2、KB-026#1、KB-013#5（原路返回）。
+  含"外卖订单在送达后 24 小时内提出，超过 24 小时不再受理"的 **KB-013#2** 两次都没进上下文。
+- **模型行为**：在只看到 #4/#5 的情况下如实回答"没有找到时效条款"，改引 KB-011 并主动说明
+  "30 天是会员储值卡本金余额的规则，不是外卖订单，请注意区分"；数据那一半完全正确
+  （7 月退款 494.00 元，证据齐）。`answer_type=hybrid` 通过。
+- **定性**：与 MiMo 的 C04 同一类——**模型检索关键词的选择差异，不是代码缺陷**：
+  同一份代码下 StepFun 两题都过。反过来 DeepSeek 过了 MiMo 失分的 C04
+  （赔付金额 CNY 8,600 在 KB-022#6），也过了记录在案的已知边界 H06
+  （0 引用 + 明说"知识库里没有找到能解释这段时间的通知或说明"）。
+- **可对账**：逐题脱敏结果 `docs/eval/deepseek-live-extra-v1.json` 里 X14 的
+  `checks[]` 直接给出期望/实际/原因。
+
+### 顺带：脱敏入库做成机器闸门
+
+上一轮（MiMo）的脱敏是手工描述的，这轮写成 `eval/desensitize_report.py`：只保留
+`model / code_commit / generated_at / total / per_category / questions`，剥掉 `base_url`、
+`questions_file`、`kb_dir`、`health` 等指向本机路径或私有端点的字段；落盘前对
+`sk-` / `api_key` / `Bearer` / `secret` / `token` / `tp-` 与 `C:\` / `127.0.0.1` /
+`api.deepseek.com` 等模式全文扫描，命中即 `sys.exit(1)` 不写文件。两份结果
+（`deepseek-live-public-v1.json`、`deepseek-live-extra-v1.json`）均通过闸门后入库
+`docs/eval/`，`docs/eval/README.md` 同步更新。
+
+### 与 mock / 预检的关系（三者互不替代）
+
+- 本轮**没有**跑 `check_regression.py`（那份基线是 mock 的），也没有把 mock 的 100 分
+  当作 DeepSeek 成绩；
+- 预检（fake 模型，P1–P13 通过 + P14 未检查）与打桩单元测试守的是**接线与代码侧闸门**，
+  真实 live 守的是**模型答得对**——这轮之后两类证据都有了。
+
+---
+
 ## 尚未解决 / 已知边界
 
 - **StepFun 账号未实名，live 分数被 403 压着**（公开 36.00/100、自拟 12.00/25，失分全为 403）。
   解除后重跑即可；在此之前不要把这两个分数当成模型能力，也不要与 mock 的 100 分混用。
-- 无 Key 的 mock 降级模式公开题库满分；**评审配置（DeepSeek）的真实 live 未验证**，
-  `eval/llm_gateway.py preflight` 为 13 项通过 + P14「未检查」（原因见 `LLM_SETUP.md` 第 7 节）。
-  live 链路本身已用 StepFun `step-5-preview` 真机跑通（数据/文档/混合/追问四类问答均正确），
-  但那不是评审配置，只作过程记录，不能当成 DeepSeek 成绩。
-  live 的**取证闸门**（数字/引用白名单、检索去指令化、证据体积）与**可观察性**
-  （完整请求/响应入 trace、Key 脱敏）另外用打桩做成了单元测试，接入真 Key 后可直接复跑。
+- 无 Key 的 mock 降级模式公开题库满分；**评审配置（DeepSeek）的真实 live 已补跑**（2026-09-27，
+  公开 100.00/100、自拟 27.00/29，见分层 14），`eval/llm_gateway.py preflight` 为 13 项通过 +
+  P14「未检查」（原因见 `LLM_SETUP.md` 第 7 节）。live 的**取证闸门**（数字/引用白名单、检索去指令化、
+  证据体积）与**可观察性**（完整请求/响应入 trace、Key 脱敏）用打桩做成了单元测试，与真实 live 互相守门。
 - 检索为纯 BM25 + 别名扩写，未引入向量检索；跨语言靠别名表的 distinctive token（如 `salmon`→三文鱼poke），
   覆盖了公开题库，但对知识库之外的近义表述仍依赖词典。
 - `run_sql` 是词法闸门而非 SQL 解析器：它按 token 判定（已排除注释/字符串误伤）并额外拦住
