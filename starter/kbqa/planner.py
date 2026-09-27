@@ -267,7 +267,13 @@ class Planner:
 
         plan.slots["asks_why"] = bool(asks_why or abnormal)
         plan.slots["about_names"] = E.asks_about_names(text)
-        plan.slots["two_part"] = False
+        # 一句话里既问了规定又问了数字（“退款多久内可以退，7 月退了多少”）时，
+        # 两半都要答：这里只负责识别，真正的合并见 Answerer._merge_doc_side /
+        # _merge_data_side。识别必须分句做——同一句里又有指标词又有规定词
+        # （“净营业额怎么算”）问的是口径本身，不是两件事。
+        doc_side, data_side = self._two_part_sides(text)
+        plan.slots["two_part"] = bool(doc_side and data_side)
+        plan.slots["data_side_kind"] = self._data_side_kind(plan) if data_side else None
         # 什么抓手都没有时（没有指标、时间、门店、商品、支付方式、排名，
         # 连一个具体数字或制度词都没有），宁可反问，也不要拿一个不相干的结果糊弄。
         plan.slots["underspecified"] = not (
@@ -288,6 +294,51 @@ class Planner:
         _ = asks_amount
         if spec.first_month:
             plan.notes.append("按“首月”处理：以该商品在数据库里的首个销售日所在自然月为区间。")
+
+    def _two_part_sides(self, text: str) -> tuple[list[str], list[str]]:
+        """按分句分出“只像文档”与“只像数据”的分句，各自返回原文。
+
+        只有**不同分句**分别命中两侧，才算一句话问了两件事：
+        - 同一句里指标词和规定词同时出现（“净营业额怎么算”）问的是口径本身，
+          拆开会把一道纯文档题误判成混合题；
+        - 分句里只有“多少/几”这类量词、没有指标或排名说法（“有多少条”）时，
+          不算数据信号——投诉条数这类事数据库里根本没有。
+        """
+        doc_side: list[str] = []
+        data_side: list[str] = []
+        for clause in (part for part in re.split(r"[，,。；;？?！!]", text or "") if part.strip()):
+            asks_doc = (
+                E.has_any(clause, E.POLICY_WORDS)
+                or E.has_any(clause, E.WHY_WORDS)
+                or E.is_abnormal(clause)
+                or E.asks_about_names(clause)
+            )
+            asks_data = bool(
+                E.find_metric(clause)
+                or E.has_any(clause, E.PAYMENT_WORDS)
+                or E.has_any(clause, E.RANK_WORDS)
+                or E.has_any(clause, E.SALES_RANK_WORDS)
+            )
+            if asks_doc and not asks_data:
+                doc_side.append(clause)
+            elif asks_data and not asks_doc:
+                data_side.append(clause)
+        return doc_side, data_side
+
+    def _data_side_kind(self, plan: Plan) -> str:
+        """夹带的数据那一半该用什么方式取数（与 `_choose_kind` 的数据分支同源）。"""
+        text = plan.standalone
+        if E.has_any(text, E.PAYMENT_WORDS):
+            return "payment"
+        if E.has_any(text, E.RANK_WORDS) and E.has_any(text, E.CATEGORY_WORDS):
+            return "category"
+        if E.has_any(text, E.STORE_WORDS) and not plan.store_id:
+            return "by_store"
+        if E.has_any(text, E.RANK_WORDS):
+            return "top_products"
+        if E.has_any(text, E.DAILY_WORDS):
+            return "daily"
+        return "summary"
 
     def _check_period(self, plan: Plan, spec: TimeSpec) -> None:
         """问到数据区间之外的时间，如实说没有数据，不猜。"""

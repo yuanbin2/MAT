@@ -19,7 +19,7 @@ from .llm import LLMClient, LLMError, redact_secret
 from .planner import Planner
 from .retriever import Retriever
 from .sessions import SessionStore
-from .sqlguard import fit_evidence
+from .sqlguard import fit_daily_evidence, fit_evidence
 from .toolspec import TOOL_NAMES, TOOLS
 from .tools import DataTools
 from .trace import Trace, TraceStore
@@ -127,8 +127,13 @@ class Service:
         try:
             if name == "search_kb":
                 return self.retrieve(cleaned["query"], cleaned.get("top_k", 5))
+            result = getattr(self.tools, name)(**cleaned)
+            if name == "daily_metrics":
+                # live 路径与 mock 的 Answerer._call 走同一套裁剪：整月逐日 ≈ 93 个数字，
+                # 仅凭一条就越过契约"全部 result 数字 ≤ 60"的上限。
+                result = fit_daily_evidence(result)
             # 所有工具输出都压到契约上限内，保证它作为 data_evidence 时不会超标。
-            return fit_evidence(getattr(self.tools, name)(**cleaned))
+            return fit_evidence(result)
         except (TypeError, ValueError, sqlite3.Error) as exc:
             return {"error": "工具 %s 执行失败：%s" % (name, exc)}
 

@@ -216,7 +216,7 @@ class HybridAnswers:
         if len(prices) == 1:
             only = next(iter(prices))
             pieces.append("%s %s 的实收单价是 %s 元（%d 行成交）。" % (label, name, only, check["rows"]))
-        else:
+        elif check.get("by_store"):
             detail = "；".join(
                 "%s %s 元（%d 行）"
                 % (store, max(bucket, key=bucket.get), bucket[max(bucket, key=bucket.get)])
@@ -224,6 +224,17 @@ class HybridAnswers:
             )
             pieces.append(
                 "%s %s 各门店的实收单价并不一样：%s。" % (label, name, detail)
+            )
+        else:
+            # 区间太长时不按门店拆（价格在区间里就变过，直方图没有意义）：
+            # 改说区间里观测到过哪些单价，别输出一句空话。
+            detail = "、".join(
+                "%s 元（%d 行）" % (price, hits)
+                for price, hits in sorted(prices.items(), key=lambda item: -item[1])
+            )
+            pieces.append(
+                "%s %s 区间较长，各门店分开看没有意义；区间内观测到的实收单价有：%s。"
+                % (label, name, detail)
             )
         result = self._search(plan, trace=trace)
         citations = []

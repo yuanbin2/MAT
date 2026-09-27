@@ -26,11 +26,17 @@ from typing import Any
 
 #: 契约硬上限：单条 ``data_evidence.result`` 序列化后不超过 4096 字节。
 MAX_EVIDENCE_BYTES = 4096
+#: 契约硬上限：一次回答里**全部** result 的数字总数不超过 60 个（拦截"穷举数字不是证据"）。
+#: 单条证据不超限不等于组合不超限——live 实测 T03：top_products(30) + unit_price_check(31) = 61。
+MAX_EVIDENCE_NUMBERS = 60
 #: 一次 run_sql 最多返回多少行 / 多少列（先于字节上限，避免结果集过大）。
 MAX_SQL_ROWS = 200
 MAX_SQL_COLUMNS = 40
 #: 单个字符串字段被截断前的最长长度。
 MAX_CELL_CHARS = 300
+#: 逐日明细作为证据时最多保留几天。回答本身也只列前几天（`render.describe_daily`
+#: 默认 7 天），整月 31 天 × 3 个数字 ≈ 93 个，仅凭一条就越过 60 的上限。
+MAX_DAILY_EVIDENCE_DAYS = 7
 
 _QUOTES = {"'": "'", '"': '"', "`": "`", "[": "]"}
 _TOKEN_RE = re.compile(r"\b\w+\b")
@@ -275,6 +281,20 @@ NARROW_NOTE = (
     "结果超过证据体积上限 4096 字节，明细已省略；"
     "请缩小查询范围（收窄日期区间、门店/商品或减少返回字段）后重新查询"
 )
+
+
+def fit_daily_evidence(result: Any, limit: int = MAX_DAILY_EVIDENCE_DAYS) -> Any:
+    """把逐日结果压到 ``limit`` 天以内，并说明**一共有多少天**。
+
+    只动"作为证据"的那一份：调用方拿到的仍是完整结果（找零营业额天数、
+    给参照区间都要用全量），回答里也只列前几天——证据没理由比回答还全。
+    """
+    if not isinstance(result, dict):
+        return result
+    days = result.get("days")
+    if not isinstance(days, list) or len(days) <= limit:
+        return result
+    return dict(result, days=days[:limit], days_total=len(days))
 
 
 def fit_evidence(result: Any, limit: int = MAX_EVIDENCE_BYTES) -> Any:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from datetime import date
 from typing import Optional
 
@@ -13,7 +14,7 @@ from .hybrid import HybridAnswers
 from .planner import Plan
 from .retriever import Retriever, SearchResult
 from .schemas import Answer
-from .sqlguard import fit_evidence
+from .sqlguard import fit_daily_evidence, fit_evidence
 from .tokenizer import content_tokens, tokenize
 
 #: 拒答闸门。两个互补的信号：
@@ -57,8 +58,10 @@ class Answerer(HybridAnswers):
         started = time.perf_counter()
         result = getattr(self.tools, name)(**params)
         trimmed = result
-        if name == "daily_metrics" and len(result.get("days", [])) > 31:
-            trimmed = {"days": result["days"][:31], "days_total": len(result["days"])}
+        if name == "daily_metrics":
+            # 契约对"全部 result 的数字总数"有 60 的上限：整月逐日 ≈ 93 个，
+            # 仅凭一条就越界。证据只保留前几天（回答也只列前几天），完整结果照常返回。
+            trimmed = fit_daily_evidence(result)
         # 契约硬上限：单条 data_evidence.result 序列化后不超过 4096 字节。
         fitted = fit_evidence(trimmed)
         evidence.append({"tool": name, "params": params, "result": fitted})
@@ -242,21 +245,40 @@ class Answerer(HybridAnswers):
         return answer
 
     def _merge_data_side(self, plan: Plan, answer: Answer, trace=None) -> Answer:
-        """文档问题里还夹着一个能查的数字时，把数字也给出来。"""
-        if not plan.slots.get("two_part") or answer.answer_type != "doc" or not plan.window:
+        """文档问题里还夹着一个能查的数字时，把数字也给出来。
+
+        两件事都要顾及：
+        - 取数方式按**夹带的那一半**选（问支付占比查 `payment_mix`、问排名查
+          `top_products`……），一律按净营业额糊弄会答非所问；
+        - 文档那一半没答上（拒答）时也要给数据这一半——一句话问了两件事，
+          一半不知道，不该把另一半一起咽掉；拒答原因留在 `notes` 里。
+        """
+        if not plan.slots.get("two_part") or not plan.window:
             return answer
-        evidence: list[dict] = []
-        result = self._call(
-            evidence,
-            "query_metrics", trace=trace,
-            start=plan.window[0],
-            end=plan.window[1],
-            store_id=plan.store_id,
-            product_id=plan.product_id,
+        if answer.answer_type not in ("doc", "refusal"):
+            return answer
+        side = replace(
+            plan,
+            intent="data",
+            kind=plan.slots.get("data_side_kind") or "summary",
+            needs_data=True,
+            needs_docs=False,
+            refusal=None,
+            # 数据这一半只做取数：不重复追问判定，也不把文档那半的槽位带进来。
+            slots=dict(plan.slots, two_part=False, asks_why=False, underspecified=False),
         )
-        answer.answer = render.describe_metrics(result, self._scope(plan), plan.metric) + "\n" + answer.answer
-        answer.data_evidence = evidence
-        answer.answer_type = "hybrid"
+        data = self._answer_data(side, trace)
+        if data.answer_type != "data" or not data.data_evidence:
+            return answer
+        if answer.answer_type == "doc":
+            answer.answer = data.answer + "\n" + answer.answer
+        else:
+            answer.answer = (
+                data.answer
+                + "\n知识库里没有找到这个问题里制度/规定那一半的依据，以上只回答能查到的数字部分。"
+            )
+        answer.data_evidence = data.data_evidence
+        answer.answer_type = "hybrid" if answer.citations else "data"
         return answer
 
     # -- 纯数据 -----------------------------------------------------------------

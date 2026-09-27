@@ -21,6 +21,9 @@ METRIC_FIELDS = ("net_revenue", "refund_amount", "orders", "aov", "qty")
 #: `top_products` 最多给几条。模型要 20 条时会攒出 65 个数字，越过"证据卫生"上限
 #: （穷举数字不是证据）——公开题库 D03/T03、自拟题 X10 实测就是这样丢分的。
 MAX_TOP_PRODUCTS = 10
+#: `unit_price_check` 按门店拆单价的最长区间（天）。超过它价格本身就变过，
+#: 按门店汇总没有意义，而那张直方图一次能贡献三十来个数字。
+PRICE_BY_STORE_MAX_DAYS = 31
 
 
 def yuan(cents: int) -> float:
@@ -336,7 +339,11 @@ class DataTools:
     def unit_price_check(self, product_id: str, start: str, end: str, store_id=None) -> dict:
         """实收单价 vs 维表建档价（KB-001 §5.3 的维表滞后）。
 
-        同一天不同门店可能卖不同的价（活动只在一家店做），所以按门店也拆一份。
+        同一天不同门店可能卖不同的价（活动只在一家店做），所以按门店也拆一份——
+        但**只在短区间拆**：区间超过 `PRICE_BY_STORE_MAX_DAYS` 天时价格本身就变过，
+        按门店汇总只会得到一张没有意义的直方图，而它一次能贡献三十来个数字，
+        把整条证据顶过契约的 60 个数字上限（live 实测 T03 就是这样丢分的）。
+        长区间只给观测到的单价分布（`observed_unit_prices`）。
         """
         product_id = (product_id or "").strip().upper()
         params: list = [product_id, start, end]
@@ -371,13 +378,16 @@ class DataTools:
         ).fetchone()
         if row:
             table_price = float(row[0])
+        # 区间太长就不按门店拆：见方法上的说明。
+        span_days = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+        per_store = by_store if len(prices) > 1 and span_days <= PRICE_BY_STORE_MAX_DAYS else {}
         return {
             "product_id": product_id,
             "start": start,
             "end": end,
             "store_id": store_id,
             "observed_unit_prices": prices,
-            "by_store": by_store if len(prices) > 1 else {},
+            "by_store": per_store,
             "rows": len(rows),
             "latest_price": latest_price,
             "latest_date": latest_date,

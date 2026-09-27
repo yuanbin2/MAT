@@ -358,6 +358,30 @@ def _count_numbers(payload) -> int:
     return len(re.findall(r"-?\d+(?:\.\d+)?", json.dumps(payload, ensure_ascii=False)))
 
 
+def _contract_numbers(payload) -> int:
+    """按**评测脚本**的口径数证据里的数字（日期、门店/商品/文档编号不算）。
+
+    契约的"全部 result 数字 ≤ 60"由 `eval/run_eval.py` 判定，测试用另一套口径
+    （比如把 `2026-05-01` 也数进去）只会得出偏严的结论，然后为了迁就它去砍
+    本来够用的能力。所以这里直接借它的 `extract_numbers`。
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    global _EVAL_EXTRACT
+    if "_EVAL_EXTRACT" not in globals():
+        path = Path(__file__).resolve().parents[2] / "eval" / "run_eval.py"
+        spec = importlib.util.spec_from_file_location("moneki_run_eval", path)
+        module = importlib.util.module_from_spec(spec)
+        # 必须先注册进 sys.modules：模块里的 @dataclass 要靠 `cls.__module__`
+        # 反查自己来解析字符串注解，不注册会炸在 dataclasses._is_type。
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _EVAL_EXTRACT = module.extract_numbers
+    return len(_EVAL_EXTRACT(json.dumps(payload, ensure_ascii=False)))
+
+
 def test_top_products_limit_is_capped(db_many_products):
     """模型索要 20 条时只能拿到 MAX_TOP_PRODUCTS 条。
 
@@ -383,3 +407,62 @@ def test_top_products_limit_is_still_usable(db_many_products):
     )
 
     assert len(got["products"]) == 3
+
+
+# -- 证据数字总量的联合上限（live 实测 T03：两条证据合计 61 个，越过 60）----------
+
+
+def test_price_question_evidence_stays_within_number_budget(client):
+    """top_products + unit_price_check 合起来也不许超过契约的 60 个数字。
+
+    D40 只夹了单工具的 limit（10 条 = 30 个数字），没夹**组合**：live 跑 T03
+    「牛肉poke 现在多少钱一份？」时模型同时调了这两个工具，`unit_price_check`
+    的 by_store 直方图又贡献三十来个，合计 61 → evidence_hygiene 判不合格。
+    """
+    from kbqa import server
+
+    svc = server.service()
+    top = svc.run_tool(
+        "top_products", {"start": "2026-05-01", "end": "2026-08-31", "limit": 30}
+    )
+    price = svc.run_tool(
+        "unit_price_check", {"product_id": "P06", "start": "2026-05-01", "end": "2026-08-31"}
+    )
+    total = _contract_numbers(top) + _contract_numbers(price)
+    assert total <= 60, "两条证据合计 %d 个数字，超过契约上限 60" % total
+
+
+def test_unit_price_check_per_store_only_for_short_windows(client):
+    """长区间不给门店×单价直方图：几个月里价格本来就变过，按门店汇总没有意义，
+    而它一次能贡献三十来个数字。问具体某一天时仍要按门店拆（各店确实不同价）。
+    """
+    from kbqa import server
+
+    svc = server.service()
+    long_window = svc.run_tool(
+        "unit_price_check", {"product_id": "P06", "start": "2026-05-01", "end": "2026-08-31"}
+    )
+    assert long_window["by_store"] == {}, "长区间不该带 by_store 直方图"
+    assert long_window["observed_unit_prices"], "观测到的单价分布仍要给出"
+
+    one_day = svc.run_tool(
+        "unit_price_check", {"product_id": "P06", "start": "2026-06-18", "end": "2026-06-18"}
+    )
+    assert one_day["by_store"], "问具体某一天时必须按门店拆（当天各店不同价）"
+
+
+def test_daily_metrics_evidence_is_bounded(client):
+    """逐日明细作为证据时要有天数上限。
+
+    公开题库里没有"整月每天多少钱"这类题，所以整月 daily_metrics（31 天 × 3 个数字
+    ≈ 93 个）一直没被证据卫生拦过；隐藏题库一旦有，evidence_hygiene 直接不合格。
+    回答本身也只列前几天，证据没理由比回答还全。
+    """
+    from kbqa import server
+
+    svc = server.service()
+    month = svc.run_tool("daily_metrics", {"start": "2026-07-01", "end": "2026-07-31"})
+    assert _contract_numbers(month) <= 60, _contract_numbers(month)
+    # 仍要说得清"一共有多少天、保留了哪几天"
+    assert month.get("days_total") == 31
+    assert len(month["days"]) < 31
