@@ -387,7 +387,8 @@ class Answerer(HybridAnswers):
         if not citations or reason:
             return Answer(
                 answer="知识库里没有找到能回答这个问题的内容，我不能编。"
-                "可以换个说法，或者确认这件事是否有成文规定。",
+                "我可以帮你查经营数字（比如净营业额、订单数、销量），"
+                "或者查公司制度（比如外卖退款有没有时限）；也可以换个说法再试一次。",
                 answer_type="refusal",
                 notes=[reason or "没有可以逐字引用的原文"],
             )

@@ -102,7 +102,8 @@ class Planner:
                 plan.notes.append("越界判断：%s" % reason)
                 plan.refusal = (
                     "这个问题超出了系统能回答的范围：%s。数据库里只有 %s 至 %s 的销售明细，"
-                    "所以我不能回答。" % (reason, self.data_period["start"], self.data_period["end"])
+                    "所以我不能回答。想查经营数字（营业额、订单数、销量）或公司制度，可以直接问。"
+                    % (reason, self.data_period["start"], self.data_period["end"])
                 )
                 return plan
             plan.intent, plan.kind = "clarify", "need_context"
@@ -252,7 +253,24 @@ class Planner:
             # 问规定的时候，即使句子里出现了指标名，也该去知识库。
             plan.kind, plan.intent = "doc", "doc"
         elif not may_query:
-            plan.kind, plan.intent = "doc", "doc"
+            # D45：问"哪家店最好"却没说比什么——宁可反问也不瞎猜指标。
+            # 只拦"没有指标信号的排名"：带销量词/支付/指标的排名不受影响。
+            if asks_rank and (
+                E.has_any(text, E.STORE_WORDS) or plan.store_id or "店铺" in text
+            ) and not E.has_any(text, E.PRODUCT_RANK_WORDS):
+                plan.kind, plan.intent = "need_metric", "clarify"
+                plan.refusal = (
+                    "你想按哪个方面比较门店？比如净营业额、有效订单数、销量、客单价。"
+                    "也可以直接问「销量最高的门店是哪家」。"
+                )
+            elif asks_rank and E.has_any(text, E.PRODUCT_RANK_WORDS):
+                plan.kind, plan.intent = "need_metric", "clarify"
+                plan.refusal = (
+                    "你想按哪个方面比较商品？比如销量、净营业额。"
+                    "也可以直接问「卖得最好的商品是哪个」。"
+                )
+            else:
+                plan.kind, plan.intent = "doc", "doc"
 
         elif len(windows) > 1 and E.has_any(text, E.TREND_WORDS):
             plan.window, plan.compare_window = windows[0], windows[1]
