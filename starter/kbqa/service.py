@@ -211,7 +211,9 @@ class Service:
             )
 
     def _run_engine(self, plan, trace: Trace, history: list[dict]) -> Answer:
-        if not self.settings.live or plan.intent == "refusal":
+        # D44：clarify 与 refusal 一样是规划器的确定性判定，live 模式也必须遵守。
+        # 实测放行给模型会自由作答并引用不相干文档（trace t-20260901-1300）。
+        if not self.settings.live or plan.intent in ("refusal", "clarify"):
             started = time.perf_counter()
             answer = self.answerer.answer(plan, trace)
             trace.step("answer_mock", {"answer_type": answer.answer_type}, started=started)

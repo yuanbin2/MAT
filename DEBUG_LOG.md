@@ -923,3 +923,28 @@ hybrid 2/4。
   换行一致有明确要求（`read_text_normalized` 就是为它存在的），当即以 `newline=""` + 显式 `\n` 重写归回 LF，
   diff 恢复成 2 行新增。**在 Windows 上改任何被跟踪的文本文件，写完都要看一眼 diff 行数。**
 
+
+### D44 live 模式绕过规划器的 clarify 判定；追问句式的天气问句没走到越界拒答
+
+- **现象**：live（DeepSeek）下问「今天天气怎么样」，回答"查不到天气信息，但可以帮你看营业额走势"，
+  并引用了 KB-042《极端天气提前闭店》——引文与结论无关（AI_USAGE §15 记录过的 H06 同类现象）。
+  mock 下同题却是 clarify「这句像是追问，但这个会话里没有上文」——两个模式行为不一致。
+- **假设**：先猜是检索命中了 KB-042 把"语料讲过"的信号抬过了阈值（`out_of_scope` 第 1 步放行）；
+  查 trace 发现不是——`plan.refusal` 里**规划器已经判了 clarify**，是回答层没执行这个判定。
+- **验证**：读 trace `t-20260901-1300`：`plan.intent="clarify"`、检索 top 分 12.7（< STRONG_RETRIEVAL=20，
+  越界第 1 步并未放行）；`service._run_engine` 只拦 `intent == "refusal"`，clarify 被交给 live 引擎。
+  打桩复现：live + clarify 计划，LiveEngine 确实被构造——判定被绕过实锤。
+- **根因**（两处叠加）：
+  1. `planner.py` 追问分支（无历史 + ≤12 字 + 追问句式）**先于** `out_of_scope` 判定直接返回 clarify——
+     「今天天气怎么样」主句含"天气"（CANNOT_KNOW），本该拒答却被反问"请补全"；
+  2. `service._run_engine` 的 live 路由只认 `intent == "refusal"`，clarify 计划泄漏给模型，
+     模型自由作答 + 引用不相干文档（H06 边界在 live 侧被这个泄漏放大成了可见问题）。
+- **修复**：
+  1. `planner.py`：追问分支返回 clarify 之前先做 `out_of_scope` 判定，命中的按 out_of_scope 拒答；
+  2. `service.py`：live 路由改为 `plan.intent in ("refusal", "clarify")`——规划器的确定性判定
+     （拒答/反问）对 live 模式同样是硬约束，模型只处理需要它的部分。
+- **回归测试**：`tests/test_clarify_boundary.py` 3 例（先红后绿：修复前 2 failed + 1 failed 后改对守门断言，
+  修复后 3 passed）；全量后端 **243 passed**；公开题库 **100.00/100** 且 `check_regression.py` 退出码 0；
+  自拟题库 **29.00/29**。X07（need_month clarify）不受影响，由守门用例钉住。
+- **边界说明**：本条不修 H06 本身（live 引用相关性判据难写，mock 对同类题本来正确）——
+  修的是"规划器已判定的确定性结论被 live 绕过"这一层；修完后该问句根本到不了模型。

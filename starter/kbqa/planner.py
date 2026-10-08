@@ -94,6 +94,17 @@ class Planner:
         plan = Plan(question=question, standalone=standalone, search_query=standalone)
         history = history or []
         if not history and E.looks_like_follow_up(question) and len(question.strip()) <= 12:
+            # D44：追问句式的短句也可能问的是"无从知道"的事（"今天天气怎么样"）。
+            # 越界判定先于 clarify：这类问题不该反问"请补全"，而该如实拒答。
+            reason = E.out_of_scope(question, *self.scout(E.head_clause(question)))
+            if reason:
+                plan.intent, plan.kind = "refusal", "out_of_scope"
+                plan.notes.append("越界判断：%s" % reason)
+                plan.refusal = (
+                    "这个问题超出了系统能回答的范围：%s。数据库里只有 %s 至 %s 的销售明细，"
+                    "所以我不能回答。" % (reason, self.data_period["start"], self.data_period["end"])
+                )
+                return plan
             plan.intent, plan.kind = "clarify", "need_context"
             plan.refusal = "这句像是追问，但这个会话里没有上文。请把问题补完整，例如“7 月的净营业额是多少”。"
             return plan
